@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.enobale.kneadra",
+  "name": "Kneadra",
+  "version": "0.1.0",
+  "author": "enobale",
+  "license": "MIT",
+  "homepage": "https://github.com/enobale/omarchy-kneadra",
+  "repository": "https://github.com/enobale/omarchy-kneadra",
+  "description": "Pizza dough baker's-percentage calculator: hydration, salt, oil, sugar, and yeast scaled to pizza size, thickness, dough ball count, and fermentation schedule.",
+  "keywords": ["pizza", "dough", "baking", "calculator", "hydration", "yeast", "fermentation"],
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Kneadra",
+    "description": "Pizza dough calculator: hydration, salt, oil, sugar, and yeast by size, ball count, and fermentation",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
