@@ -83,6 +83,13 @@ function yeastTypeLabel(type) {
   return "IDY"
 }
 
+function thicknessLabelFor(preset) {
+  if (preset === "thin") return "Thin"
+  if (preset === "thick") return "Thick"
+  if (preset === "custom") return "Custom"
+  return "Medium"
+}
+
 // Solves baker's-percentage ingredients from a target total dough weight.
 // input: { ballWeight, ballCount, hydrationPct, saltPct, oilPct, sugarPct,
 //           idyPct, yeastType }
@@ -113,4 +120,82 @@ function formatGrams(value) {
   if (!isFinite(value)) return "0 g"
   if (value < 10) return value.toFixed(1) + " g"
   return Math.round(value) + " g"
+}
+
+function sizeDescriptionFor(input) {
+  return input.shape === "pan"
+    ? input.panWidthIn + "×" + input.panLengthIn + "\" pan"
+    : input.sizeIn + "\" round"
+}
+
+// Builds the ingredient rows shared by the plain-text and HTML recipe
+// renderers, so the two formats can't drift apart.
+// input: same shape as computeRecipe()'s input, plus { recipe } (the
+// already-computed result) and { shape, sizeIn, panWidthIn, panLengthIn,
+// thicknessLabel, ballCount, ballWeight, fermentHours, fermentTempF }.
+function recipeIngredientRows(input) {
+  var rows = [
+    ["Flour", formatGrams(input.recipe.flourG)],
+    ["Water", formatGrams(input.recipe.waterG) + " (" + input.hydrationPct + "% hydration)"],
+    ["Salt", formatGrams(input.recipe.saltG) + " (" + input.saltPct + "%)"]
+  ]
+  if (input.oilPct > 0) rows.push(["Oil", formatGrams(input.recipe.oilG) + " (" + input.oilPct + "%)"])
+  if (input.sugarPct > 0) rows.push(["Sugar", formatGrams(input.recipe.sugarG) + " (" + input.sugarPct + "%)"])
+  rows.push([
+    "Yeast (" + yeastTypeLabel(input.yeastType) + ")",
+    formatGrams(input.recipe.yeastG) + " (" + input.recipe.yeastPct.toFixed(2) + "%)"
+  ])
+  return rows
+}
+
+// Plain-text recipe summary, for copying to the clipboard and pasting
+// anywhere (notes, chat, email).
+function formatRecipeText(input) {
+  var lines = [
+    "Kneadra — Pizza Dough Recipe",
+    "",
+    input.ballCount + " × " + input.ballWeight + "g balls — "
+      + sizeDescriptionFor(input) + ", " + input.thicknessLabel + " crust",
+    "Total dough: " + formatGrams(input.recipe.totalDoughG),
+    ""
+  ]
+  recipeIngredientRows(input).forEach(function(row) {
+    lines.push(row[0] + ": " + row[1])
+  })
+  lines.push("")
+  lines.push("Fermentation: " + input.fermentHours + "h at " + input.fermentTempF + "°F")
+  return lines.join("\n")
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+// Self-contained HTML page for the "Print" action: opened via xdg-open so
+// the desktop's default handler (typically a browser) supplies a real
+// print dialog — printer selection and "Save as PDF" — without Kneadra
+// needing to talk to CUPS or any print stack itself.
+function formatRecipeHtml(input) {
+  var rowsHtml = recipeIngredientRows(input).map(function(row) {
+    return "<tr><td>" + escapeHtml(row[0]) + "</td><td class=\"amt\">" + escapeHtml(row[1]) + "</td></tr>"
+  }).join("")
+
+  return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Kneadra Recipe</title><style>"
+    + "body{font-family:sans-serif;max-width:32em;margin:2em auto;padding:0 1em;color:#222;}"
+    + "h1{font-size:1.4em;margin-bottom:0.1em;}"
+    + ".sub{color:#666;margin:0.2em 0;}"
+    + "table{width:100%;border-collapse:collapse;margin-top:1em;}"
+    + "td{padding:0.35em 0;border-bottom:1px solid #ddd;}"
+    + ".amt{text-align:right;font-weight:bold;}"
+    + "</style></head><body>"
+    + "<h1>🍕 Kneadra</h1>"
+    + "<p class=\"sub\">" + input.ballCount + " × " + input.ballWeight + "g balls — "
+      + escapeHtml(sizeDescriptionFor(input)) + ", " + escapeHtml(input.thicknessLabel) + " crust</p>"
+    + "<p class=\"sub\">Total dough: " + escapeHtml(formatGrams(input.recipe.totalDoughG)) + "</p>"
+    + "<table>" + rowsHtml + "</table>"
+    + "<p class=\"sub\">Fermentation: " + input.fermentHours + "h at " + input.fermentTempF + "°F</p>"
+    + "</body></html>"
 }

@@ -1,5 +1,7 @@
 import QtQuick
 import QtQuick.Controls
+import Quickshell
+import Quickshell.Io
 import qs.Ui
 import qs.Commons
 import "Calculator.js" as Calculator
@@ -87,6 +89,52 @@ Panel {
     root.fermentTempF = tempF
   }
 
+  // ---- share / print ----
+  property bool copied: false
+  Timer { id: copiedTimer; interval: 2000; onTriggered: root.copied = false }
+
+  function shareInput() {
+    return {
+      ballCount: root.ballCount,
+      ballWeight: root.ballWeight,
+      shape: root.shape,
+      sizeIn: root.sizeIn,
+      panWidthIn: root.panWidthIn,
+      panLengthIn: root.panLengthIn,
+      thicknessLabel: Calculator.thicknessLabelFor(root.thickness),
+      hydrationPct: root.hydrationPct,
+      saltPct: root.saltPct,
+      oilPct: root.oilPct,
+      sugarPct: root.sugarPct,
+      yeastType: root.yeastType,
+      fermentHours: root.fermentHours,
+      fermentTempF: root.fermentTempF,
+      recipe: root.recipe
+    }
+  }
+
+  function copyRecipe() {
+    Quickshell.clipboardText = Calculator.formatRecipeText(root.shareInput())
+    root.copied = true
+    copiedTimer.restart()
+  }
+
+  // Rendered as HTML and handed to the desktop's default handler (usually
+  // the browser) rather than driven through CUPS directly: that gets us a
+  // real print dialog — printer selection, "Save as PDF" — for free, with
+  // no dependency on a specific print stack being configured.
+  function printRecipe() {
+    recipeFile.setText(Calculator.formatRecipeHtml(root.shareInput()))
+    Util.execArgv(["xdg-open", recipeFile.path])
+  }
+
+  FileView {
+    id: recipeFile
+    path: Quickshell.cacheDir + "/kneadra-recipe.html"
+    atomicWrites: true
+    printErrors: false
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -102,6 +150,10 @@ Panel {
     property real maximum: 100
     property real step: 0.5
     property int decimals: 1
+    // The panel's ScrollView Flickable — set by callers so a wheel tick
+    // that lands on this slider mid-scroll moves the panel instead of the
+    // slider's value. See the wheel-blocking MouseArea below.
+    property Flickable scrollFlickable: null
     signal moved(real value)
 
     spacing: Style.spacing.xs
@@ -130,13 +182,39 @@ Panel {
       }
     }
 
-    PanelSlider {
+    Item {
       width: parent.width
-      minimum: labeledSlider.minimum
-      maximum: labeledSlider.maximum
-      step: labeledSlider.step
-      value: labeledSlider.value
-      onMoved: function(v) { labeledSlider.moved(v) }
+      height: slider.implicitHeight
+
+      PanelSlider {
+        id: slider
+        width: parent.width
+        minimum: labeledSlider.minimum
+        maximum: labeledSlider.maximum
+        step: labeledSlider.step
+        value: labeledSlider.value
+        onMoved: function(v) { labeledSlider.moved(v) }
+      }
+
+      // qs.Ui's PanelSlider always treats a wheel-over as a value nudge,
+      // with no opt-out — fine for a single slider, but inside a panel
+      // that's mostly sliders, scrolling past one to reach the next
+      // silently changes it. Swallow the wheel here (acceptedButtons:
+      // NoButton keeps click/drag/hover falling through to the slider
+      // underneath) and scroll the panel instead.
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.NoButton
+        onWheel: function(wheel) {
+          var flick = labeledSlider.scrollFlickable
+          if (flick) {
+            var maxY = Math.max(0, flick.contentHeight - flick.height)
+            var next = flick.contentY - (wheel.angleDelta.y / 120) * Style.space(48)
+            flick.contentY = Math.max(0, Math.min(maxY, next))
+          }
+          wheel.accepted = true
+        }
+      }
     }
   }
 
@@ -200,7 +278,11 @@ Panel {
 
         Column {
           id: panelColumn
-          width: scrollArea.availableWidth
+          // Leave room for the overlay scrollbar: it floats on top of the
+          // Flickable rather than reserving its own width, so content that
+          // reaches the right edge (e.g. the bold recipe amounts) gets
+          // covered by it while scrolling without this margin.
+          width: scrollArea.availableWidth - Style.space(10)
           spacing: Style.spacing.panelGap
 
           Row {
@@ -339,6 +421,7 @@ Panel {
               decimals: 3
               value: root.thicknessFactorOz
               minimum: 0.05; maximum: 0.30; step: 0.005
+              scrollFlickable: scrollArea.contentItem
               onMoved: function(v) { root.setThicknessFactor(v) }
             }
           }
@@ -360,6 +443,7 @@ Panel {
             label: "Hydration"
             value: root.hydrationPct
             minimum: 50; maximum: 90; step: 1; decimals: 0
+            scrollFlickable: scrollArea.contentItem
             onMoved: function(v) { root.hydrationPct = v }
           }
           LabeledSlider {
@@ -367,6 +451,7 @@ Panel {
             label: "Salt"
             value: root.saltPct
             minimum: 0; maximum: 4; step: 0.1
+            scrollFlickable: scrollArea.contentItem
             onMoved: function(v) { root.saltPct = v }
           }
           LabeledSlider {
@@ -374,6 +459,7 @@ Panel {
             label: "Oil"
             value: root.oilPct
             minimum: 0; maximum: 10; step: 0.5
+            scrollFlickable: scrollArea.contentItem
             onMoved: function(v) { root.oilPct = v }
           }
           LabeledSlider {
@@ -381,6 +467,7 @@ Panel {
             label: "Sugar"
             value: root.sugarPct
             minimum: 0; maximum: 5; step: 0.5
+            scrollFlickable: scrollArea.contentItem
             onMoved: function(v) { root.sugarPct = v }
           }
 
@@ -439,6 +526,29 @@ Panel {
           RecipeRow {
             label: "Yeast (" + Calculator.yeastTypeLabel(root.yeastType) + ", " + root.recipe.yeastPct.toFixed(2) + "%)"
             amount: Calculator.formatGrams(root.recipe.yeastG)
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.spacing.sm
+
+            Button {
+              width: (parent.width - Style.spacing.sm) / 2
+              bordered: true
+              iconText: "🖨️"
+              text: "Print"
+              tooltipText: "Open the recipe to print, or Save as PDF"
+              onClicked: root.printRecipe()
+            }
+
+            Button {
+              width: (parent.width - Style.spacing.sm) / 2
+              bordered: true
+              iconText: root.copied ? "✓" : "📋"
+              text: root.copied ? "Copied!" : "Copy"
+              tooltipText: "Copy recipe as text, to paste anywhere"
+              onClicked: root.copyRecipe()
+            }
           }
         }
       }
