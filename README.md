@@ -9,15 +9,20 @@ Set the number of dough balls and choose round (with a diameter override)
 or a rectangular pan (width × length), plus a crust Thickness Factor —
 Thin/Medium/Thick presets, or an advanced raw oz/in² override for anyone
 who already knows their number — to get a suggested per-ball dough weight
-(always editable by hand). Baker's percentages — hydration, salt, oil,
-sugar — are set with sliders. Pick a fermentation temperature (°F) and
-target time, and the yeast percentage is computed from a
-temperature/time model (shorter or warmer ferments need more yeast; long,
-cold ferments need very little). Yeast type (instant dry / active dry /
-fresh) converts the final gram amount.
+(always editable by hand). Baker's percentages — water (hydration), salt, oil,
+sugar, and optional diastatic malt (0% by default; for extra browning in a
+home oven) — are set with sliders. Pick a fermentation temperature (°F) and
+target time, and the yeast percentage is read from a fermentation chart
+(hours to full proof by temperature and yeast dose, 35–80°F) and
+interpolated between its cells; shorter or warmer ferments need more yeast,
+long ferments — including 24h+ at room temperature — need very little. If
+the time or temperature falls outside what the chart covers, a note under
+the yeast row says so. Yeast type (instant dry / active dry / fresh)
+converts the final gram amount.
 
 The recipe section at the bottom shows the resulting flour, water, salt,
-oil, sugar, and yeast weights in grams for the total batch.
+oil, sugar, diastatic malt (when used), and yeast weights in grams for the
+total batch.
 
 ## Install
 

@@ -31,6 +31,8 @@ Panel {
   property real saltPct: 2.5
   property real oilPct: 2
   property real sugarPct: 1
+  // Diastatic malt powder: optional, only for extra browning in a home oven.
+  property real maltPct: 0
 
   // ---- fermentation ----
   property int fermentTempF: 70
@@ -38,6 +40,7 @@ Panel {
   property string yeastType: "idy" // idy | ady | fresh
 
   readonly property real idyPct: Calculator.idyPercentForHours(root.fermentHours, root.fermentTempF)
+  readonly property string fermentNote: Calculator.fermentRangeNote(root.fermentHours, root.fermentTempF)
   readonly property var recipe: Calculator.computeRecipe({
     ballWeight: root.ballWeight,
     ballCount: root.ballCount,
@@ -45,6 +48,7 @@ Panel {
     saltPct: root.saltPct,
     oilPct: root.oilPct,
     sugarPct: root.sugarPct,
+    maltPct: root.maltPct,
     idyPct: root.idyPct,
     yeastType: root.yeastType
   })
@@ -106,6 +110,7 @@ Panel {
       saltPct: root.saltPct,
       oilPct: root.oilPct,
       sugarPct: root.sugarPct,
+      maltPct: root.maltPct,
       yeastType: root.yeastType,
       fermentHours: root.fermentHours,
       fermentTempF: root.fermentTempF,
@@ -193,7 +198,29 @@ Panel {
         maximum: labeledSlider.maximum
         step: labeledSlider.step
         value: labeledSlider.value
-        onMoved: function(v) { labeledSlider.moved(v) }
+        // PanelSlider leaves snapping to the caller, so a drag reports raw
+        // values (e.g. 69.774 for a step-1 slider). Snap to `step` here so
+        // the stored value matches the label and the copied/printed recipe.
+        onMoved: function(v) {
+          var snapped = Math.round(v / labeledSlider.step) * labeledSlider.step
+          var clamped = Math.max(labeledSlider.minimum, Math.min(labeledSlider.maximum, snapped))
+          var stepped = parseFloat(clamped.toFixed(6))
+          // The slider just drew its knob at the raw pointer position; pull
+          // it onto the step so knob, label and stored value always agree
+          // (otherwise the knob glides back to the step on release).
+          slider.liveValue = stepped
+          labeledSlider.moved(stepped)
+        }
+      }
+
+      // The panel scrolls, so a little vertical drift mid-drag lets its
+      // Flickable steal the mouse grab and the drag just stops. Freeze
+      // scrolling while a slider is held.
+      Binding {
+        target: labeledSlider.scrollFlickable
+        property: "interactive"
+        value: false
+        when: slider.dragging && labeledSlider.scrollFlickable !== null
       }
 
       // qs.Ui's PanelSlider always treats a wheel-over as a value nudge,
@@ -275,6 +302,15 @@ Panel {
         clip: true
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
         ScrollBar.vertical.policy: panelColumn.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+
+        // Qt's default lets the Flickable overshoot and spring back at the
+        // ends, which reads as a bounce at the bottom of the panel. Every
+        // first-party panel stops at the bounds instead.
+        Binding {
+          target: scrollArea.contentItem
+          property: "boundsBehavior"
+          value: Flickable.StopAtBounds
+        }
 
         Column {
           id: panelColumn
@@ -440,7 +476,7 @@ Panel {
 
           LabeledSlider {
             width: parent.width
-            label: "Hydration"
+            label: "Water"
             value: root.hydrationPct
             minimum: 50; maximum: 90; step: 1; decimals: 0
             scrollFlickable: scrollArea.contentItem
@@ -469,6 +505,15 @@ Panel {
             minimum: 0; maximum: 5; step: 0.5
             scrollFlickable: scrollArea.contentItem
             onMoved: function(v) { root.sugarPct = v }
+          }
+
+          LabeledSlider {
+            width: parent.width
+            label: "Diastatic malt"
+            value: root.maltPct
+            minimum: 0; maximum: 2; step: 0.25; decimals: 2
+            scrollFlickable: scrollArea.contentItem
+            onMoved: function(v) { root.maltPct = v }
           }
 
           PanelSeparator {}
@@ -523,9 +568,21 @@ Panel {
           RecipeRow { label: "Salt"; amount: Calculator.formatGrams(root.recipe.saltG) }
           RecipeRow { visible: root.oilPct > 0; label: "Oil"; amount: Calculator.formatGrams(root.recipe.oilG) }
           RecipeRow { visible: root.sugarPct > 0; label: "Sugar"; amount: Calculator.formatGrams(root.recipe.sugarG) }
+          RecipeRow { visible: root.maltPct > 0; label: "Diastatic malt"; amount: Calculator.formatGrams(root.recipe.maltG) }
           RecipeRow {
             label: "Yeast (" + Calculator.yeastTypeLabel(root.yeastType) + ", " + root.recipe.yeastPct.toFixed(2) + "%)"
             amount: Calculator.formatGrams(root.recipe.yeastG)
+          }
+
+          Text {
+            width: parent.width
+            visible: root.fermentNote !== ""
+            textFormat: Text.PlainText
+            text: root.fermentNote
+            wrapMode: Text.WordWrap
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
           }
 
           Row {

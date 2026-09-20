@@ -34,35 +34,144 @@ function suggestedWeightFromArea(areaIn2, thicknessFactorOz) {
   return Math.max(50, Math.round(grams / 5) * 5)
 }
 
-// Time-to-full-proof model for instant dry yeast (IDY), fit from the
-// reference chart/formula at https://derwille1.github.io/cf-calculator/:
-//   hours = A * idyPct^(-ALPHA) * exp(-BETA * (tempF - REF_TEMP))
-// i.e. proof time falls off as a power of the yeast dose and decays
-// exponentially as temperature rises above REF_TEMP (35°F). Covers both
-// cold (fridge, ~35-45°F) and room-temp (~65-75°F) ferments with one
-// continuous curve instead of two separate tables.
-var FERMENT_A = 30.91
-var FERMENT_ALPHA = 0.72
-var FERMENT_BETA = 0.110
-var FERMENT_REF_TEMP_F = 35
+// Time-to-full-proof data for instant dry yeast (IDY), taken from the
+// "Fermentation Table – Extended" chart (Documents/Pizza/Fermentation-
+// Table---Extended.jpg): hours to full proof by dough temperature (rows,
+// whole °F) and yeast dose (columns). The chart's IDY row is fresh/cake
+// yeast (CY) × 0.32, which is what FERMENT_CHART_IDY holds. Cells the chart
+// leaves blank (times too long or too short to list) are simply absent.
+//
+// Each FERMENT_CHART_HOURS row is [index of its first listed FERMENT_CHART_IDY
+// column, hours...], one row per °F from FERMENT_CHART_MIN_TEMP_F upward.
+var FERMENT_CHART_MIN_TEMP_F = 35
+var FERMENT_CHART_MAX_TEMP_F = 80
+var FERMENT_CHART_IDY = [0.0032, 0.0064, 0.0096, 0.016, 0.024, 0.032, 0.04, 0.048, 0.056, 0.064, 0.096, 0.128, 0.16, 0.192, 0.224, 0.256, 0.32, 0.384, 0.448, 0.512, 0.576, 0.64, 0.704, 0.768, 0.832, 0.896, 0.96]
 
-// IDY percent (of flour weight) needed to reach full proof in `hours` at
-// `tempF`. Clamped to a realistic dough range so extreme inputs (near-zero
-// hours, very cold temps) don't blow up into nonsense percentages.
-function idyPercentForHours(hours, tempF) {
-  var expF = Math.exp(-FERMENT_BETA * (tempF - FERMENT_REF_TEMP_F))
-  var base = hours / (FERMENT_A * expF)
-  if (base <= 0) return 2
-  var pct = Math.pow(base, -1 / FERMENT_ALPHA)
-  return Math.max(0.01, Math.min(2, pct))
+var FERMENT_CHART_HOURS = [
+  [10, 167, 136, 115, 101, 90, 82, 70, 61, 54, 49, 45, 42, 39, 37, 35, 33, 31], // 35°F
+  [10, 149, 121, 103, 90, 80, 73, 62, 54, 49, 44, 40, 37, 35, 33, 31, 29, 28], // 36°F
+  [10, 133, 108, 92, 80, 72, 65, 55, 49, 43, 39, 36, 33, 31, 29, 28, 26, 25], // 37°F
+  [9, 161, 120, 97, 82, 72, 65, 59, 50, 44, 39, 35, 32, 30, 28, 26, 25, 24, 22], // 38°F
+  [8, 159, 145, 108, 87, 74, 65, 58, 53, 45, 39, 35, 32, 29, 27, 25, 24, 22, 21, 20], // 39°F
+  [7, 161, 144, 130, 97, 79, 67, 59, 52, 48, 40, 35, 32, 29, 26, 24, 23, 21, 20, 19, 18], // 40°F
+  [6, 166, 145, 130, 118, 88, 71, 61, 53, 47, 43, 37, 32, 29, 26, 24, 22, 21, 19, 18, 17, 16], // 41°F
+  [6, 151, 132, 118, 107, 80, 65, 55, 48, 43, 39, 33, 29, 26, 24, 22, 20, 19, 18, 17, 16, 15], // 42°F
+  [5, 161, 137, 120, 107, 97, 72, 59, 50, 44, 39, 35, 30, 26, 24, 21, 20, 18, 17, 16, 15, 14, 14], // 43°F
+  [5, 147, 125, 109, 98, 88, 66, 53, 45, 40, 36, 32, 27, 24, 21, 19, 18, 17, 15, 14, 14, 13, 12, 11], // 44°F
+  [4, 165, 134, 114, 100, 89, 81, 60, 49, 41, 36, 32, 29, 25, 22, 20, 18, 16, 15, 14, 13, 12, 12, 11], // 45°F
+  [4, 151, 122, 104, 91, 81, 74, 55, 45, 38, 33, 30, 27, 23, 20, 18, 16, 15, 14, 13, 12, 11, 11, 10], // 46°F
+  [4, 138, 112, 95, 83, 74, 67, 50, 41, 35, 30, 27, 25, 21, 18, 16, 15, 14, 13, 12, 11, 10, 10, 9], // 47°F
+  [4, 126, 102, 87, 76, 68, 62, 46, 37, 32, 28, 25, 23, 19, 17, 15, 14, 12, 12, 11, 10, 10, 9], // 48°F
+  [3, 156, 116, 94, 80, 70, 63, 57, 42, 34, 29, 26, 23, 21, 18, 15, 14, 12, 11, 11, 10, 9, 9, 8], // 49°F
+  [3, 143, 107, 86, 74, 64, 58, 52, 39, 32, 27, 23, 21, 19, 16, 14, 13, 11, 11, 10, 9, 9, 8, 8, 7], // 50°F
+  [3, 132, 98, 80, 68, 59, 53, 48, 36, 29, 25, 22, 19, 18, 15, 13, 12, 11, 10, 9, 8, 8, 7, 7], // 51°F
+  [3, 122, 90, 73, 62, 55, 49, 44, 33, 27, 23, 20, 18, 16, 14, 12, 11, 10, 9, 8, 8, 7, 7, 6], // 52°F
+  [2, 163, 112, 84, 68, 58, 50, 45, 41, 30, 25, 21, 18, 16, 15, 13, 11, 10, 9, 8, 8, 7, 7, 6, 6], // 53°F
+  [2, 150, 104, 77, 63, 53, 47, 42, 38, 28, 23, 19, 17, 15, 14, 12, 10, 9, 8, 8, 7, 7, 6, 6, 5], // 54°F
+  [2, 139, 96, 71, 58, 49, 43, 39, 35, 26, 21, 18, 16, 14, 13, 11, 9, 8, 8, 7, 7, 6, 6, 5, 5], // 55°F
+  [2, 129, 89, 66, 54, 46, 40, 36, 32, 24, 20, 17, 15, 13, 12, 10, 9, 8, 7, 7, 6, 6, 5, 5, 5], // 56°F
+  [1, 161, 120, 82, 61, 50, 42, 37, 33, 30, 22, 18, 15, 14, 12, 11, 9, 8, 7, 7, 6, 6, 5, 5, 4, 4], // 57°F
+  [1, 149, 111, 77, 57, 46, 39, 34, 31, 28, 21, 17, 14, 13, 11, 10, 9, 8, 7, 6, 6, 5, 5, 4, 4, 4], // 58°F
+  [1, 139, 103, 71, 53, 43, 37, 32, 29, 26, 19, 16, 13, 12, 10, 9, 8, 7, 6, 6, 5, 5, 4, 4, 4, 4], // 59°F
+  [1, 129, 96, 66, 49, 40, 34, 30, 27, 24, 18, 15, 12, 11, 10, 9, 7, 7, 6, 5, 5, 5, 4, 4, 4, 4], // 60°F
+  [1, 120, 90, 62, 46, 37, 32, 28, 25, 22, 17, 14, 12, 10, 9, 8, 7, 6, 5, 5, 5, 4, 4, 4, 3, 3], // 61°F
+  [1, 112, 83, 58, 43, 35, 30, 26, 23, 21, 16, 13, 11, 9, 8, 8, 6, 6, 5, 5, 4, 4, 4, 3, 3, 3], // 62°F
+  [1, 105, 78, 54, 40, 32, 28, 24, 22, 20, 15, 12, 10, 9, 8, 7, 6, 5, 5, 4, 4, 4, 3, 3, 3, 3], // 63°F
+  [0, 162, 98, 73, 50, 37, 30, 26, 23, 20, 18, 14, 11, 9, 8, 7, 7, 6, 5, 4, 4, 4, 3, 3, 3, 3, 3], // 64°F
+  [0, 152, 92, 68, 47, 35, 28, 24, 21, 19, 17, 13, 10, 9, 8, 7, 6, 5, 5, 4, 3, 3, 3, 3, 3, 2, 2], // 65°F
+  [0, 142, 86, 64, 44, 33, 27, 23, 20, 18, 16, 12, 10, 8, 7, 6, 5, 4, 4, 3, 3, 3, 3, 2, 2, 2], // 66°F
+  [0, 133, 80, 60, 41, 31, 25, 21, 19, 17, 15, 11, 9, 8, 7, 6, 5, 5, 4, 4, 3, 3, 3, 2, 2, 2], // 67°F
+  [0, 120, 73, 54, 37, 28, 22, 19, 17, 15, 14, 10, 8, 7, 6, 5, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2], // 68°F
+  [0, 109, 66, 49, 34, 25, 20, 17, 15, 14, 12, 9, 7, 6, 6, 5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2], // 69°F
+  [0, 99, 60, 45, 31, 23, 19, 16, 14, 12, 11, 8, 7, 6, 5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 2], // 70°F
+  [0, 90, 55, 41, 28, 21, 17, 14, 13, 11, 10, 8, 6, 5, 5, 4, 3, 3, 2, 2, 2, 2, 2, 1, 1], // 71°F
+  [0, 83, 50, 37, 26, 19, 15, 13, 12, 10, 9, 7, 6, 5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1], // 72°F
+  [0, 76, 46, 34, 24, 18, 14, 12, 11, 9, 9, 6, 5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1], // 73°F
+  [0, 70, 42, 32, 22, 16, 13, 11, 10, 9, 8, 6, 5, 4, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1], // 74°F
+  [0, 65, 39, 29, 20, 15, 12, 10, 9, 8, 7, 5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1], // 75°F
+  [0, 60, 36, 27, 19, 14, 11, 10, 8, 7, 7, 5, 4, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1], // 76°F
+  [0, 56, 34, 25, 17, 13, 10, 9, 8, 7, 6, 5, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1], // 77°F
+  [0, 52, 31, 23, 16, 12, 10, 8, 7, 6, 6, 4, 4, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1], // 78°F
+  [0, 48, 29, 22, 15, 11, 9, 8, 7, 6, 5, 4, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1], // 79°F
+  [0, 45, 27, 20, 14, 10, 8, 7, 6, 6, 5, 4, 3, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1], // 80°F
+]
+
+// Past the ends of a chart row the dose is extrapolated along a power law,
+// hours ∝ idyPct^-ALPHA, with ALPHA fit to the whole chart.
+var FERMENT_EXTRAP_ALPHA = 0.78
+
+// Dose limits for what the UI will ever show. The chart itself spans about
+// 0.003%–0.96% IDY; these only stop extreme inputs (near-zero hours, very
+// long times) from producing nonsense percentages.
+var IDY_MIN_PCT = 0.001
+var IDY_MAX_PCT = 2
+
+// One chart row as parallel arrays, yeast ascending / hours descending. The
+// chart rounds to whole hours, so short ferments repeat the same number
+// across several columns; only the lowest-yeast cell of each run is kept so
+// hours -> yeast stays single-valued.
+function fermentChartRow(tempF) {
+  var row = FERMENT_CHART_HOURS[tempF - FERMENT_CHART_MIN_TEMP_F]
+  var idy = []
+  var hrs = []
+  for (var k = 1; k < row.length; k++) {
+    if (hrs.length === 0 || row[k] < hrs[hrs.length - 1]) {
+      idy.push(FERMENT_CHART_IDY[row[0] + k - 1])
+      hrs.push(row[k])
+    }
+  }
+  return { idy: idy, hrs: hrs }
 }
 
-// Inverse of the above: estimated hours to full proof for a given IDY%
-// and temperature. Not currently surfaced in the UI, kept for reference/
-// potential display of "≈ Xh at this dose".
-function hoursForIdyPercent(idyPct, tempF) {
-  if (idyPct <= 0) return Infinity
-  return FERMENT_A * Math.pow(idyPct, -FERMENT_ALPHA) * Math.exp(-FERMENT_BETA * (tempF - FERMENT_REF_TEMP_F))
+// IDY percent for `hours` on one chart row: log-log interpolation between
+// the two surrounding cells, or extrapolation (edge "long"/"short") when
+// `hours` runs past the longest/shortest time the row lists.
+function fermentRowLookup(row, hours) {
+  var last = row.hrs.length - 1
+  if (hours > row.hrs[0])
+    return { pct: row.idy[0] * Math.pow(hours / row.hrs[0], -1 / FERMENT_EXTRAP_ALPHA), edge: "long" }
+  if (hours < row.hrs[last])
+    return { pct: row.idy[last] * Math.pow(hours / row.hrs[last], -1 / FERMENT_EXTRAP_ALPHA), edge: "short" }
+  for (var k = 0; k < last; k++) {
+    if (hours <= row.hrs[k] && hours >= row.hrs[k + 1]) {
+      var frac = (Math.log(row.hrs[k]) - Math.log(hours)) / (Math.log(row.hrs[k]) - Math.log(row.hrs[k + 1]))
+      return { pct: Math.exp(Math.log(row.idy[k]) + frac * (Math.log(row.idy[k + 1]) - Math.log(row.idy[k]))), edge: "" }
+    }
+  }
+  return { pct: row.idy[last], edge: "" }
+}
+
+// The chart lookup for an (hours, tempF) pair. Temperatures outside the
+// chart use its nearest row; the UI only ever offers whole °F.
+function fermentLookup(hours, tempF) {
+  if (!(hours > 0)) return { pct: Infinity, edge: "short" }
+  var t = Math.round(Math.max(FERMENT_CHART_MIN_TEMP_F, Math.min(FERMENT_CHART_MAX_TEMP_F, tempF)))
+  return fermentRowLookup(fermentChartRow(t), hours)
+}
+
+// IDY percent (of flour weight) needed to reach full proof in `hours` at
+// `tempF`, clamped to IDY_MIN_PCT..IDY_MAX_PCT.
+function idyPercentForHours(hours, tempF) {
+  return Math.max(IDY_MIN_PCT, Math.min(IDY_MAX_PCT, fermentLookup(hours, tempF).pct))
+}
+
+// A short warning when `hours` at `tempF` isn't backed by the chart (or was
+// clamped), so the shown dose isn't a straight chart reading; "" when it is.
+function fermentRangeNote(hours, tempF) {
+  var r = fermentLookup(hours, tempF)
+  if (tempF < FERMENT_CHART_MIN_TEMP_F)
+    return "Colder than the fermentation chart covers (" + FERMENT_CHART_MIN_TEMP_F + "°F) — dose shown is for " + FERMENT_CHART_MIN_TEMP_F + "°F."
+  if (tempF > FERMENT_CHART_MAX_TEMP_F)
+    return "Warmer than the fermentation chart covers (" + FERMENT_CHART_MAX_TEMP_F + "°F) — dose shown is for " + FERMENT_CHART_MAX_TEMP_F + "°F, so it will run high."
+  if (r.pct > IDY_MAX_PCT)
+    return "Too short for this temperature — dose capped at " + IDY_MAX_PCT + "%. Try a longer time or a warmer temperature."
+  if (r.pct < IDY_MIN_PCT)
+    return "Too long for this temperature — the dose is below " + IDY_MIN_PCT + "%. Try a shorter time or a cooler temperature."
+  if (r.edge === "long")
+    return "Longer than the fermentation chart covers at this temperature — the dose is extrapolated."
+  if (r.edge === "short")
+    return "Shorter than the fermentation chart covers at this temperature — the dose is extrapolated."
+  return ""
 }
 
 // Conversion from instant dry yeast (IDY) equivalent to other yeast forms.
@@ -92,7 +201,7 @@ function thicknessLabelFor(preset) {
 
 // Solves baker's-percentage ingredients from a target total dough weight.
 // input: { ballWeight, ballCount, hydrationPct, saltPct, oilPct, sugarPct,
-//           idyPct, yeastType }
+//           maltPct, idyPct, yeastType }
 // All *Pct values are percentages of flour weight (flour itself is 100%).
 function computeRecipe(input) {
   var totalDoughG = Math.max(0, input.ballWeight * input.ballCount)
@@ -102,6 +211,7 @@ function computeRecipe(input) {
     + input.saltPct / 100
     + input.oilPct / 100
     + input.sugarPct / 100
+    + input.maltPct / 100
     + yeastPct / 100
   var flourG = sumFraction > 0 ? totalDoughG / sumFraction : 0
   return {
@@ -111,6 +221,7 @@ function computeRecipe(input) {
     saltG: flourG * input.saltPct / 100,
     oilG: flourG * input.oilPct / 100,
     sugarG: flourG * input.sugarPct / 100,
+    maltG: flourG * input.maltPct / 100,
     yeastG: flourG * yeastPct / 100,
     yeastPct: yeastPct
   }
@@ -118,6 +229,9 @@ function computeRecipe(input) {
 
 function formatGrams(value) {
   if (!isFinite(value)) return "0 g"
+  // Two decimals below 1 g so a tiny (but real) yeast dose doesn't
+  // round to a misleading "0.0 g".
+  if (value < 1) return value.toFixed(2) + " g"
   if (value < 10) return value.toFixed(1) + " g"
   return Math.round(value) + " g"
 }
@@ -141,6 +255,7 @@ function recipeIngredientRows(input) {
   ]
   if (input.oilPct > 0) rows.push(["Oil", formatGrams(input.recipe.oilG) + " (" + input.oilPct + "%)"])
   if (input.sugarPct > 0) rows.push(["Sugar", formatGrams(input.recipe.sugarG) + " (" + input.sugarPct + "%)"])
+  if (input.maltPct > 0) rows.push(["Diastatic malt", formatGrams(input.recipe.maltG) + " (" + input.maltPct + "%)"])
   rows.push([
     "Yeast (" + yeastTypeLabel(input.yeastType) + ")",
     formatGrams(input.recipe.yeastG) + " (" + input.recipe.yeastPct.toFixed(2) + "%)"
