@@ -1,9 +1,36 @@
 # Kneadra
 
-![Kneadra preview](preview.png)
+![Kneadra in action](demo.gif)
 
-A pizza dough baker's-percentage calculator for the Omarchy bar. Click the
-🍕 icon to open it.
+**Plan pizza dough right from your Omarchy bar.** Tell Kneadra how many
+pizzas, what size and crust, and how long the dough will ferment, and it
+gives you the exact grams of flour, water, salt, oil, and yeast on a live
+recipe card.
+
+- 🍕 **See what you're making.** The card draws your pizza to scale: it grows
+  with the diameter, turns into a pan pie in pan mode, and its crust puffs
+  up from thin to thick.
+- ⏱️ **Yeast that matches your schedule.** Same-day, overnight on the
+  counter, or 2–3 days in the fridge: the yeast amount comes from a real
+  fermentation chart (35–80°F), not a one-size rule of thumb, so long
+  room-temperature ferments don't come out overproofed.
+- 🎚️ **Change anything, see the grams change.** Settings on the left, recipe
+  on the right, updating as you drag.
+- 🖨️ **Take it to the kitchen.** Print it (or save as PDF), or copy it as
+  text.
+- 🌍 **°F and inches, or °C and centimetres.** One click in the header
+  switches every size, temperature, and label.
+- 💾 **Remembers your recipe.** Your settings are still there after a
+  restart or reboot.
+- Round pies or rectangular pans (Detroit, Sicilian, grandma), any ball
+  count, and instant, active dry, or fresh yeast.
+
+Click the 🍕 icon in the bar to open it.
+
+## How it works
+
+![Kneadra panel](preview.png)
+
 
 Set the number of dough balls and choose round (with a diameter override)
 or a rectangular pan (width × length), plus a crust Thickness Factor —
@@ -20,9 +47,11 @@ the time or temperature falls outside what the chart covers, a note under
 the yeast row says so. Yeast type (instant dry / active dry / fresh)
 converts the final gram amount.
 
-The recipe section at the bottom shows the resulting flour, water, salt,
-oil, sugar, diastatic malt (when used), and yeast weights in grams for the
-total batch.
+The recipe card shows the resulting flour, water, salt, oil, sugar,
+diastatic malt (when used), and yeast weights in grams for the total batch.
+
+Settings are saved to `~/.local/state/omarchy/io.github.enobale.kneadra.json`
+(delete it to start over from the defaults).
 
 ## Install
 
@@ -35,6 +64,15 @@ Or, to keep a local editable copy instead of a git checkout:
 ```bash
 git clone https://github.com/enobale/omarchy-kneadra ~/.config/omarchy/plugins/io.github.enobale.kneadra
 omarchy plugin enable io.github.enobale.kneadra
+```
+
+## Keybinding
+
+Kneadra exposes an IPC target, so you can open it from the keyboard. Add to
+`~/.config/hypr/bindings.conf`:
+
+```
+bind = SUPER ALT, P, exec, qs -p /usr/share/omarchy/shell ipc call io.github.enobale.kneadra toggle
 ```
 
 ## Remove
@@ -50,6 +88,8 @@ omarchy plugin remove io.github.enobale.kneadra
   `KeyboardPanel` / `WidgetButton` / `PanelSlider` / `NumberField` /
   `ButtonGroup` / `Dropdown` components (no external dependencies beyond
   the Omarchy shell's own `qs.Ui` / `qs.Commons` component kit)
+- `PizzaPreview.qml` — the to-scale pizza + dough-ball illustration on the
+  recipe card (a QML `Canvas`)
 - `Calculator.js` — pure dough-math helpers (dough-weight suggestion from
   pan area and Thickness Factor, temperature/time-based yeast percent,
   baker's-percentage solve)

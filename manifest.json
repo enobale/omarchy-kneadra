@@ -2,20 +2,20 @@
   "schemaVersion": 1,
   "id": "io.github.enobale.kneadra",
   "name": "Kneadra",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "enobale",
   "license": "MIT",
   "homepage": "https://github.com/enobale/omarchy-kneadra",
   "repository": "https://github.com/enobale/omarchy-kneadra",
-  "description": "Pizza dough baker's-percentage calculator: hydration, salt, oil, sugar, and yeast scaled to pizza size, thickness, dough ball count, and fermentation schedule.",
-  "keywords": ["pizza", "dough", "baking", "calculator", "hydration", "yeast", "fermentation"],
+  "description": "Plan pizza dough right from your bar: pick size, crust, and how long it'll ferment, and get exact grams of flour, water, salt, oil, and yeast, on a live recipe card with a to-scale pizza. Handles same-day, overnight, and multi-day cold ferments.",
+  "keywords": ["pizza", "dough", "recipe", "calculator", "baking", "cooking", "kitchen", "yeast", "fermentation", "cold ferment", "hydration", "neapolitan", "new york", "detroit", "sicilian", "pan pizza"],
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Kneadra",
-    "description": "Pizza dough calculator: hydration, salt, oil, sugar, and yeast by size, ball count, and fermentation",
+    "description": "Pizza dough planner: size, crust, and ferment time in, exact grams out",
     "category": "Info",
     "allowMultiple": false,
     "defaultSection": "right"

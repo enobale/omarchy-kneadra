@@ -13,6 +13,35 @@ function thicknessFactorOzFor(preset) {
   return 0.105 // medium
 }
 
+// ---- units ----
+// Everything is computed in inches and °F (the fermentation chart's native
+// unit). "metric" only changes what the panel shows and accepts: lengths in
+// cm, temperatures in °C, Thickness Factor in g/cm².
+var CM_PER_IN = 2.54
+var G_PER_CM2_PER_OZ_PER_IN2 = 28.3495 / (CM_PER_IN * CM_PER_IN)
+
+function lengthToDisplay(inches, metric) { return metric ? inches * CM_PER_IN : inches }
+function lengthFromDisplay(value, metric) { return metric ? value / CM_PER_IN : value }
+function tempToDisplay(tempF, metric) { return metric ? (tempF - 32) * 5 / 9 : tempF }
+function tempFromDisplay(value, metric) { return metric ? value * 9 / 5 + 32 : value }
+function thicknessToDisplay(oz, metric) { return metric ? oz * G_PER_CM2_PER_OZ_PER_IN2 : oz }
+function thicknessFromDisplay(value, metric) { return metric ? value / G_PER_CM2_PER_OZ_PER_IN2 : value }
+
+// Whole display units: 12" -> 12", or 30 cm (30.48 rounded) in metric.
+function formatLength(inches, metric) {
+  return Math.round(lengthToDisplay(inches, metric)) + (metric ? " cm" : "\"")
+}
+
+function formatTemp(tempF, metric) {
+  return Math.round(tempToDisplay(tempF, metric)) + (metric ? "°C" : "°F")
+}
+
+// Round-pizza size shortcuts, in display units: common inch sizes, and the
+// usual metric pizzeria sizes (≈ the same pies).
+function sizePresets(metric) {
+  return metric ? [25, 30, 35, 40, 45] : [10, 12, 14, 16, 18]
+}
+
 function ozPerIn2ToGramsPerIn2(oz) {
   return oz * 28.3495
 }
@@ -157,12 +186,14 @@ function idyPercentForHours(hours, tempF) {
 
 // A short warning when `hours` at `tempF` isn't backed by the chart (or was
 // clamped), so the shown dose isn't a straight chart reading; "" when it is.
-function fermentRangeNote(hours, tempF) {
+function fermentRangeNote(hours, tempF, metric) {
   var r = fermentLookup(hours, tempF)
-  if (tempF < FERMENT_CHART_MIN_TEMP_F)
-    return "Colder than the fermentation chart covers (" + FERMENT_CHART_MIN_TEMP_F + "°F) — dose shown is for " + FERMENT_CHART_MIN_TEMP_F + "°F."
-  if (tempF > FERMENT_CHART_MAX_TEMP_F)
-    return "Warmer than the fermentation chart covers (" + FERMENT_CHART_MAX_TEMP_F + "°F) — dose shown is for " + FERMENT_CHART_MAX_TEMP_F + "°F, so it will run high."
+  var minT = formatTemp(FERMENT_CHART_MIN_TEMP_F, metric)
+  var maxT = formatTemp(FERMENT_CHART_MAX_TEMP_F, metric)
+  if (Math.round(tempF) < FERMENT_CHART_MIN_TEMP_F)
+    return "Colder than the fermentation chart covers (" + minT + ") — dose shown is for " + minT + "."
+  if (Math.round(tempF) > FERMENT_CHART_MAX_TEMP_F)
+    return "Warmer than the fermentation chart covers (" + maxT + ") — dose shown is for " + maxT + ", so it will run high."
   if (r.pct > IDY_MAX_PCT)
     return "Too short for this temperature — dose capped at " + IDY_MAX_PCT + "%. Try a longer time or a warmer temperature."
   if (r.pct < IDY_MIN_PCT)
@@ -237,16 +268,19 @@ function formatGrams(value) {
 }
 
 function sizeDescriptionFor(input) {
-  return input.shape === "pan"
-    ? input.panWidthIn + "×" + input.panLengthIn + "\" pan"
-    : input.sizeIn + "\" round"
+  if (input.shape === "pan") {
+    var w = Math.round(lengthToDisplay(input.panWidthIn, input.metric))
+    var l = Math.round(lengthToDisplay(input.panLengthIn, input.metric))
+    return w + "×" + l + (input.metric ? " cm" : "\"") + " pan"
+  }
+  return formatLength(input.sizeIn, input.metric) + " round"
 }
 
 // Builds the ingredient rows shared by the plain-text and HTML recipe
 // renderers, so the two formats can't drift apart.
 // input: same shape as computeRecipe()'s input, plus { recipe } (the
 // already-computed result) and { shape, sizeIn, panWidthIn, panLengthIn,
-// thicknessLabel, ballCount, ballWeight, fermentHours, fermentTempF }.
+// thicknessLabel, ballCount, ballWeight, fermentHours, fermentTempF, metric }.
 function recipeIngredientRows(input) {
   var rows = [
     ["Flour", formatGrams(input.recipe.flourG)],
@@ -278,7 +312,7 @@ function formatRecipeText(input) {
     lines.push(row[0] + ": " + row[1])
   })
   lines.push("")
-  lines.push("Fermentation: " + input.fermentHours + "h at " + input.fermentTempF + "°F")
+  lines.push("Fermentation: " + input.fermentHours + "h at " + formatTemp(input.fermentTempF, input.metric))
   return lines.join("\n")
 }
 
@@ -311,6 +345,28 @@ function formatRecipeHtml(input) {
       + escapeHtml(sizeDescriptionFor(input)) + ", " + escapeHtml(input.thicknessLabel) + " crust</p>"
     + "<p class=\"sub\">Total dough: " + escapeHtml(formatGrams(input.recipe.totalDoughG)) + "</p>"
     + "<table>" + rowsHtml + "</table>"
-    + "<p class=\"sub\">Fermentation: " + input.fermentHours + "h at " + input.fermentTempF + "°F</p>"
+    + "<p class=\"sub\">Fermentation: " + input.fermentHours + "h at " + escapeHtml(formatTemp(input.fermentTempF, input.metric)) + "</p>"
     + "</body></html>"
+}
+
+// ---- saved settings ----
+// Validates a parsed settings file against `defaults`: each field keeps the
+// default unless the saved value has the same type (and, for numbers, lies
+// in `ranges[field]`). A hand-edited or older file can't break the panel.
+function sanitizeSettings(saved, defaults, ranges) {
+  var out = {}
+  for (var key in defaults) {
+    var d = defaults[key]
+    var v = saved ? saved[key] : undefined
+    if (typeof v !== typeof d || (typeof v === "number" && !isFinite(v))) {
+      out[key] = d
+    } else if (typeof v === "number" && ranges[key]) {
+      out[key] = Math.max(ranges[key][0], Math.min(ranges[key][1], v))
+    } else if (typeof v === "string" && ranges[key] && ranges[key].indexOf(v) < 0) {
+      out[key] = d
+    } else {
+      out[key] = v
+    }
+  }
+  return out
 }

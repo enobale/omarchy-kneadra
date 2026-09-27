@@ -9,13 +9,20 @@ import "Calculator.js" as Calculator
 Panel {
   id: root
   moduleName: "io.github.enobale.kneadra"
+  // `qs -p /usr/share/omarchy/shell ipc call io.github.enobale.kneadra toggle`
+  // — lets a Hyprland keybind open the calculator.
+  ipcTarget: "io.github.enobale.kneadra"
+
+  // Display units only: all state below stays in inches / °F / oz/in².
+  property bool metric: false
 
   // ---- dough balls ----
   property int ballCount: 4
   property string shape: "round" // round | pan
-  property int sizeIn: 12 // round diameter, inches
-  property int panWidthIn: 12 // pan/rectangular, inches
-  property int panLengthIn: 16
+  // Real, not int: a size typed in cm (30 cm = 11.81") is kept exactly.
+  property real sizeIn: 12 // round diameter, inches
+  property real panWidthIn: 12 // pan/rectangular, inches
+  property real panLengthIn: 16
   property string thickness: "medium" // thin | medium | thick | custom
   property real thicknessFactorOz: Calculator.thicknessFactorOzFor("medium") // TF, oz/in² — advanced override
   property bool advancedOpen: false
@@ -35,12 +42,12 @@ Panel {
   property real maltPct: 0
 
   // ---- fermentation ----
-  property int fermentTempF: 70
+  property real fermentTempF: 70
   property real fermentHours: 4
   property string yeastType: "idy" // idy | ady | fresh
 
   readonly property real idyPct: Calculator.idyPercentForHours(root.fermentHours, root.fermentTempF)
-  readonly property string fermentNote: Calculator.fermentRangeNote(root.fermentHours, root.fermentTempF)
+  readonly property string fermentNote: Calculator.fermentRangeNote(root.fermentHours, root.fermentTempF, root.metric)
   readonly property var recipe: Calculator.computeRecipe({
     ballWeight: root.ballWeight,
     ballCount: root.ballCount,
@@ -62,8 +69,9 @@ Panel {
     root.recomputeBallWeight()
   }
 
-  function selectSize(value) {
-    root.sizeIn = parseInt(value, 10)
+  // Size setters take inches; callers convert from display units.
+  function setDiameter(inches) {
+    root.sizeIn = inches
     root.recomputeBallWeight()
   }
 
@@ -114,6 +122,7 @@ Panel {
       yeastType: root.yeastType,
       fermentHours: root.fermentHours,
       fermentTempF: root.fermentTempF,
+      metric: root.metric,
       recipe: root.recipe
     }
   }
@@ -132,6 +141,88 @@ Panel {
     recipeFile.setText(Calculator.formatRecipeHtml(root.shareInput()))
     Util.execArgv(["xdg-open", recipeFile.path])
   }
+
+  // ---- remembered settings ----
+  // Every setting is saved (debounced) to a small JSON file and restored at
+  // startup, so the recipe survives shell restarts and reboots.
+  readonly property string settingsDir: Quickshell.env("HOME") + "/.local/state/omarchy"
+  readonly property var settingsDefaults: ({
+    metric: false, ballCount: 4, shape: "round", sizeIn: 12, panWidthIn: 12, panLengthIn: 16,
+    thickness: "medium", thicknessFactorOz: Calculator.thicknessFactorOzFor("medium"),
+    ballWeight: Calculator.suggestedWeightFromArea(Calculator.roundAreaIn2(12), Calculator.thicknessFactorOzFor("medium")),
+    hydrationPct: 65, saltPct: 2.5, oilPct: 2, sugarPct: 1, maltPct: 0,
+    fermentTempF: 70, fermentHours: 4, yeastType: "idy"
+  })
+  // Numbers are clamped to what the controls allow; strings must be one of
+  // the listed choices.
+  readonly property var settingsRanges: ({
+    ballCount: [1, 24], sizeIn: [5.9, 30], panWidthIn: [3.9, 30], panLengthIn: [3.9, 30],
+    thicknessFactorOz: [0.05, 0.30], ballWeight: [50, 2000],
+    hydrationPct: [50, 90], saltPct: [0, 4], oilPct: [0, 10], sugarPct: [0, 5], maltPct: [0, 2],
+    fermentTempF: [33, 90], fermentHours: [1, 240],
+    shape: ["round", "pan"], thickness: ["thin", "medium", "thick", "custom"], yeastType: ["idy", "ady", "fresh"]
+  })
+  readonly property string settingsJson: JSON.stringify({
+    version: 1, metric: root.metric, ballCount: root.ballCount, shape: root.shape,
+    sizeIn: root.sizeIn, panWidthIn: root.panWidthIn, panLengthIn: root.panLengthIn,
+    thickness: root.thickness, thicknessFactorOz: root.thicknessFactorOz, ballWeight: root.ballWeight,
+    hydrationPct: root.hydrationPct, saltPct: root.saltPct, oilPct: root.oilPct,
+    sugarPct: root.sugarPct, maltPct: root.maltPct,
+    fermentTempF: root.fermentTempF, fermentHours: root.fermentHours, yeastType: root.yeastType
+  }, null, 2)
+  property bool settingsLoaded: false
+
+  onSettingsJsonChanged: if (root.settingsLoaded) settingsSaveTimer.restart()
+
+  function restoreSettings(raw) {
+    // FileView can report a load more than once at startup; only the first
+    // counts, or a late duplicate would undo the user's first edits.
+    if (root.settingsLoaded) return
+    var saved = null
+    try { saved = raw ? JSON.parse(raw) : null } catch (e) { saved = null }
+    var s = Calculator.sanitizeSettings(saved, root.settingsDefaults, root.settingsRanges)
+    // Assigned directly (not via the setters) so a hand-set ball weight
+    // isn't recomputed away.
+    root.metric = s.metric
+    root.ballCount = s.ballCount
+    root.shape = s.shape
+    root.sizeIn = s.sizeIn
+    root.panWidthIn = s.panWidthIn
+    root.panLengthIn = s.panLengthIn
+    root.thickness = s.thickness
+    root.thicknessFactorOz = s.thicknessFactorOz
+    root.ballWeight = Math.round(s.ballWeight)
+    root.hydrationPct = s.hydrationPct
+    root.saltPct = s.saltPct
+    root.oilPct = s.oilPct
+    root.sugarPct = s.sugarPct
+    root.maltPct = s.maltPct
+    root.fermentTempF = s.fermentTempF
+    root.fermentHours = s.fermentHours
+    root.yeastType = s.yeastType
+    root.settingsLoaded = true
+  }
+
+  Timer {
+    id: settingsSaveTimer
+    interval: 400
+    onTriggered: settingsFile.setText(root.settingsJson + "\n")
+  }
+
+  FileView {
+    id: settingsFile
+    path: root.settingsDir + "/io.github.enobale.kneadra.json"
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.restoreSettings(text())
+    // First run: no file yet. Start from the defaults and save from here on.
+    onLoadFailed: root.restoreSettings("")
+  }
+
+  // Omarchy creates this directory itself; make sure anyway, so the first
+  // save can't fail on an unusual install.
+  Component.onCompleted: Util.execArgv(["mkdir", "-p", root.settingsDir])
 
   FileView {
     id: recipeFile
@@ -245,24 +336,47 @@ Panel {
     }
   }
 
-  // Ingredient name + computed weight, right-aligned.
-  component RecipeRow: Row {
+  // Ingredient name ........ weight, like a printed recipe card.
+  component RecipeRow: Item {
     id: recipeRow
     property string label: ""
     property string amount: ""
     width: parent.width
+    implicitHeight: Math.max(nameLabel.implicitHeight, amountLabel.implicitHeight)
 
     Text {
+      id: nameLabel
+      anchors.left: parent.left
       textFormat: Text.PlainText
       text: recipeRow.label
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body
-      width: parent.width - amountLabel.implicitWidth
+    }
+
+    Item {
+      anchors.left: nameLabel.right
+      anchors.right: amountLabel.left
+      anchors.leftMargin: Style.spacing.sm
+      anchors.rightMargin: Style.spacing.sm
+      height: parent.height
+      clip: true
+
+      Text {
+        anchors.right: parent.right
+        anchors.baseline: parent.top
+        anchors.baselineOffset: nameLabel.baselineOffset
+        textFormat: Text.PlainText
+        text: " .".repeat(60)
+        color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.3)
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+      }
     }
 
     Text {
       id: amountLabel
+      anchors.right: parent.right
       textFormat: Text.PlainText
       text: recipeRow.amount
       color: Color.accent
@@ -288,8 +402,12 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(640))
+    // Settings on the left (scrolls), recipe card on the right (fixed), so
+    // the grams stay in view while any slider moves.
+    readonly property real columnGap: Style.spacing.panelGap * 2
+    readonly property real columnWidth: (panel.contentWidth - panel.columnGap) / 2
+    contentWidth: panel.fittedContentWidth(Style.space(340) * 2 + panel.columnGap)
+    contentHeight: panel.fittedContentHeight(Math.max(panelColumn.implicitHeight, card.implicitHeight), Style.space(640))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -298,7 +416,10 @@ Panel {
 
       ScrollView {
         id: scrollArea
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: panel.columnWidth
         clip: true
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
         ScrollBar.vertical.policy: panelColumn.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
@@ -316,13 +437,18 @@ Panel {
           id: panelColumn
           // Leave room for the overlay scrollbar: it floats on top of the
           // Flickable rather than reserving its own width, so content that
-          // reaches the right edge (e.g. the bold recipe amounts) gets
+          // reaches the right edge (e.g. slider value labels) gets
           // covered by it while scrolling without this margin.
           width: scrollArea.availableWidth - Style.space(10)
           spacing: Style.spacing.panelGap
 
-          Row {
+          Item {
             width: parent.width
+            height: Math.max(titleRow.implicitHeight, unitsToggle.implicitHeight)
+
+          Row {
+            id: titleRow
+            anchors.verticalCenter: parent.verticalCenter
             spacing: Style.spacing.md
 
             Text {
@@ -347,6 +473,20 @@ Panel {
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
               }
+            }
+          }
+
+            ButtonGroup {
+              id: unitsToggle
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              fontSize: Style.font.bodySmall
+              options: [
+                { value: "us", label: "°F · in" },
+                { value: "metric", label: "°C · cm" }
+              ]
+              value: root.metric ? "metric" : "us"
+              onChanged: function(v) { root.metric = v === "metric" }
             }
           }
 
@@ -375,45 +515,54 @@ Panel {
 
           ButtonGroup {
             visible: root.shape === "round"
-            options: [
-              { value: "10", label: "10\"" },
-              { value: "12", label: "12\"" },
-              { value: "14", label: "14\"" },
-              { value: "16", label: "16\"" },
-              { value: "18", label: "18\"" }
-            ]
-            value: String(root.sizeIn)
-            onChanged: function(v) { root.selectSize(v) }
+            options: Calculator.sizePresets(root.metric).map(function(n) {
+              return { value: String(n), label: n + (root.metric ? "" : "\"") }
+            })
+            value: String(Math.round(Calculator.lengthToDisplay(root.sizeIn, root.metric)))
+            onChanged: function(v) { root.setDiameter(Calculator.lengthFromDisplay(parseInt(v, 10), root.metric)) }
           }
 
-          NumberField {
-            visible: root.shape === "round"
-            label: "Diameter (in) — edit to override"
-            value: root.sizeIn
-            from: 6
-            to: 30
-            stepSize: 1
-            onModified: function(v) { root.selectSize(String(v)) }
+          // Rebuilt whenever the units change. SpinBox clamps its value to
+          // from/to, and on a unit switch the new value can land before the
+          // new range does (cm -> in: 12 clamped to the old 15 minimum,
+          // then stuck). A fresh field applies range and value together.
+          Repeater {
+            model: [root.metric]
+            NumberField {
+              visible: root.shape === "round"
+              label: "Diameter (" + (root.metric ? "cm" : "in") + ") — edit to override"
+              value: Math.round(Calculator.lengthToDisplay(root.sizeIn, root.metric))
+              from: root.metric ? 15 : 6
+              to: root.metric ? 76 : 30
+              stepSize: 1
+              onModified: function(v) { root.setDiameter(Calculator.lengthFromDisplay(v, root.metric)) }
+            }
           }
 
-          NumberField {
-            visible: root.shape === "pan"
-            label: "Pan width (in)"
-            value: root.panWidthIn
-            from: 4
-            to: 30
-            stepSize: 1
-            onModified: function(v) { root.setPanWidth(v) }
+          Repeater {
+            model: [root.metric]
+            NumberField {
+              visible: root.shape === "pan"
+              label: "Pan width (" + (root.metric ? "cm" : "in") + ")"
+              value: Math.round(Calculator.lengthToDisplay(root.panWidthIn, root.metric))
+              from: root.metric ? 10 : 4
+              to: root.metric ? 76 : 30
+              stepSize: 1
+              onModified: function(v) { root.setPanWidth(Calculator.lengthFromDisplay(v, root.metric)) }
+            }
           }
 
-          NumberField {
-            visible: root.shape === "pan"
-            label: "Pan length (in)"
-            value: root.panLengthIn
-            from: 4
-            to: 30
-            stepSize: 1
-            onModified: function(v) { root.setPanLength(v) }
+          Repeater {
+            model: [root.metric]
+            NumberField {
+              visible: root.shape === "pan"
+              label: "Pan length (" + (root.metric ? "cm" : "in") + ")"
+              value: Math.round(Calculator.lengthToDisplay(root.panLengthIn, root.metric))
+              from: root.metric ? 10 : 4
+              to: root.metric ? 76 : 30
+              stepSize: 1
+              onModified: function(v) { root.setPanLength(Calculator.lengthFromDisplay(v, root.metric)) }
+            }
           }
 
           PanelSectionHeader { text: "Thickness" }
@@ -444,7 +593,8 @@ Panel {
               textFormat: Text.PlainText
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "Thickness Factor (TF) is the dough weight per square inch of pan area — the same metric pizza-dough calculators (e.g. Lehmann's) use. Overriding it here replaces the Thin/Medium/Thick preset."
+              text: "Thickness Factor (TF) is the dough weight per " + (root.metric ? "square centimetre" : "square inch")
+                + " of pan area — the same metric pizza-dough calculators (e.g. Lehmann's) use. Overriding it here replaces the Thin/Medium/Thick preset."
               color: Qt.darker(Color.foreground, 1.4)
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
@@ -453,12 +603,15 @@ Panel {
             LabeledSlider {
               width: parent.width
               label: "Thickness Factor"
-              unit: " oz/in²"
-              decimals: 3
-              value: root.thicknessFactorOz
-              minimum: 0.05; maximum: 0.30; step: 0.005
+              // Metric: g/cm² (×4.39), on a step that keeps a similar feel.
+              unit: root.metric ? " g/cm²" : " oz/in²"
+              decimals: root.metric ? 2 : 3
+              value: Calculator.thicknessToDisplay(root.thicknessFactorOz, root.metric)
+              minimum: Calculator.thicknessToDisplay(0.05, root.metric)
+              maximum: Calculator.thicknessToDisplay(0.30, root.metric)
+              step: root.metric ? 0.02 : 0.005
               scrollFlickable: scrollArea.contentItem
-              onMoved: function(v) { root.setThicknessFactor(v) }
+              onMoved: function(v) { root.setThicknessFactor(Calculator.thicknessFromDisplay(v, root.metric)) }
             }
           }
 
@@ -520,21 +673,25 @@ Panel {
           PanelSectionHeader { text: "Fermentation" }
 
           ButtonGroup {
+            // Values stay in °F; only the labels follow the units.
             options: [
-              { value: "70", label: "Room temp (70°F)" },
-              { value: "38", label: "Fridge (38°F)" }
+              { value: "70", label: "Room temp (" + Calculator.formatTemp(70, root.metric) + ")" },
+              { value: "38", label: "Fridge (" + Calculator.formatTemp(38, root.metric) + ")" }
             ]
-            value: String(root.fermentTempF)
+            value: String(Math.round(root.fermentTempF))
             onChanged: function(v) { root.selectFermentPreset(parseInt(v, 10)) }
           }
 
-          NumberField {
-            label: "Temperature (°F)"
-            value: root.fermentTempF
-            from: 33
-            to: 90
-            stepSize: 1
-            onModified: function(v) { root.fermentTempF = v }
+          Repeater {
+            model: [root.metric]
+            NumberField {
+              label: "Temperature (" + (root.metric ? "°C" : "°F") + ")"
+              value: Math.round(Calculator.tempToDisplay(root.fermentTempF, root.metric))
+              from: root.metric ? 1 : 33
+              to: root.metric ? 32 : 90
+              stepSize: 1
+              onModified: function(v) { root.fermentTempF = Calculator.tempFromDisplay(v, root.metric) }
+            }
           }
 
           NumberField {
@@ -557,11 +714,54 @@ Panel {
             onChanged: function(v) { root.yeastType = v }
           }
 
-          PanelSeparator {}
-          PanelSectionHeader {
-            text: "Recipe — " + root.ballCount + " × " + root.ballWeight
-              + "g = " + Math.round(root.recipe.totalDoughG) + "g total"
+        }
+      }
+
+      Rectangle {
+        id: card
+        anchors.right: parent.right
+        anchors.top: parent.top
+        width: panel.columnWidth
+        readonly property real pad: Style.space(14)
+        implicitHeight: cardColumn.implicitHeight + cardButtons.height + Style.spacing.md + 2 * card.pad
+        // Full height so it reads as one card, with Print/Copy at its foot.
+        anchors.bottom: parent.bottom
+        radius: Style.space(12)
+        color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.05)
+        border.width: 1
+        border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.1)
+        clip: true
+
+        Column {
+          id: cardColumn
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: card.pad
+          spacing: Style.spacing.sm
+
+          PizzaPreview {
+            width: parent.width
+            framed: false
+            stacked: true
+            shape: root.shape
+            diameterIn: root.sizeIn
+            panWidthIn: root.panWidthIn
+            panLengthIn: root.panLengthIn
+            thicknessFactorOz: root.thicknessFactorOz
+            thicknessLabel: Calculator.thicknessLabelFor(root.thickness)
+            sizeLabel: Calculator.sizeDescriptionFor({
+              shape: root.shape, sizeIn: root.sizeIn, panWidthIn: root.panWidthIn,
+              panLengthIn: root.panLengthIn, metric: root.metric
+            })
+            ballCount: root.ballCount
+            ballWeight: root.ballWeight
+            totalDoughG: root.recipe.totalDoughG
           }
+
+          PanelSeparator {}
+
+          PanelSectionHeader { text: "Ingredients" }
 
           RecipeRow { label: "Flour"; amount: Calculator.formatGrams(root.recipe.flourG) }
           RecipeRow { label: "Water"; amount: Calculator.formatGrams(root.recipe.waterG) }
@@ -576,6 +776,16 @@ Panel {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
+            text: "Ferment " + root.fermentHours + " h at " + Calculator.formatTemp(root.fermentTempF, root.metric)
+              + (root.fermentTempF <= 45 ? " (fridge)" : "")
+            color: Qt.darker(Color.foreground, 1.3)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            width: parent.width
             visible: root.fermentNote !== ""
             textFormat: Text.PlainText
             text: root.fermentNote
@@ -585,27 +795,32 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
-          Row {
-            width: parent.width
-            spacing: Style.spacing.sm
+        }
 
-            Button {
-              width: (parent.width - Style.spacing.sm) / 2
-              bordered: true
-              iconText: "🖨️"
-              text: "Print"
-              tooltipText: "Open the recipe to print, or Save as PDF"
-              onClicked: root.printRecipe()
-            }
+        Row {
+          id: cardButtons
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          anchors.margins: card.pad
+          spacing: Style.spacing.sm
 
-            Button {
-              width: (parent.width - Style.spacing.sm) / 2
-              bordered: true
-              iconText: root.copied ? "✓" : "📋"
-              text: root.copied ? "Copied!" : "Copy"
-              tooltipText: "Copy recipe as text, to paste anywhere"
-              onClicked: root.copyRecipe()
-            }
+          Button {
+            width: (parent.width - Style.spacing.sm) / 2
+            bordered: true
+            iconText: "🖨️"
+            text: "Print"
+            tooltipText: "Open the recipe to print, or Save as PDF"
+            onClicked: root.printRecipe()
+          }
+
+          Button {
+            width: (parent.width - Style.spacing.sm) / 2
+            bordered: true
+            iconText: root.copied ? "✓" : "📋"
+            text: root.copied ? "Copied!" : "Copy"
+            tooltipText: "Copy recipe as text, to paste anywhere"
+            onClicked: root.copyRecipe()
           }
         }
       }
