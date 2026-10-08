@@ -24,9 +24,11 @@ Item {
   // Pizza on top with the ball summary centered under it (for a tall,
   // narrow spot like the recipe card) instead of side by side.
   property bool stacked: false
+  // Largest the stacked pizza may draw; the card shrinks it to make room.
+  property real maxPizzaSize: Style.space(230)
 
   readonly property real pizzaSize: root.stacked
-    ? Math.min(root.width, Style.space(230))
+    ? Math.min(root.width, root.maxPizzaSize)
     : Style.space(176)
 
   implicitHeight: root.stacked

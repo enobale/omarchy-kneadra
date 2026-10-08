@@ -45,9 +45,59 @@ Panel {
   property real fermentTempF: 70
   property real fermentHours: 4
   property string yeastType: "idy" // idy | ady | fresh
+  // Optional second stage, e.g. cold ferment then a few hours at room temp.
+  // fermentTempF/fermentHours above are then stage 1.
+  property bool twoStage: false
+  property real stage2TempF: 70
+  property real stage2Hours: 3
 
-  readonly property real idyPct: Calculator.idyPercentForHours(root.fermentHours, root.fermentTempF)
-  readonly property string fermentNote: Calculator.fermentRangeNote(root.fermentHours, root.fermentTempF, root.metric)
+  readonly property var stages: root.twoStage
+    ? [{ hours: root.fermentHours, tempF: root.fermentTempF }, { hours: root.stage2Hours, tempF: root.stage2TempF }]
+    : [{ hours: root.fermentHours, tempF: root.fermentTempF }]
+  readonly property real idyPct: Calculator.idyPercentForStages(root.stages)
+  readonly property string fermentNote: Calculator.fermentStagesNote(root.stages, root.metric)
+
+  function setTwoStage(on) {
+    // Two stages almost always means cold first, so start stage 1 in the
+    // fridge rather than leaving a room-temp time there.
+    if (on && !root.twoStage && root.fermentTempF > 45) {
+      root.fermentTempF = 38
+      root.fermentHours = 48
+    }
+    root.twoStage = on
+  }
+
+  // ---- schedule ----
+  // Work back from when the pizza goes in the oven. bakeAt is epoch ms.
+  property bool scheduleOn: false
+  property real bakeAt: Calculator.defaultBakeAt(Date.now())
+  property real nowMs: Date.now()
+  Timer { interval: 30000; running: true; repeat: true; onTriggered: root.nowMs = Date.now() }
+  onOpenedChanged: root.nowMs = Date.now()
+
+  readonly property var scheduleSteps: root.scheduleOn ? Calculator.scheduleSteps(root.stages, root.bakeAt, root.metric) : []
+  readonly property bool scheduleLate: root.scheduleSteps.length > 0 && root.scheduleSteps[0].at < root.nowMs - 5 * 60000
+
+  function setScheduleOn(on) {
+    // A bake time left over from last time may be long gone.
+    if (on && root.bakeAt < Date.now()) root.bakeAt = Calculator.defaultBakeAt(Date.now())
+    root.nowMs = Date.now()
+    root.scheduleOn = on
+  }
+
+  // One desktop reminder per upcoming step, through Omarchy's own
+  // `omarchy-reminder` (they show up in its reminders indicator).
+  property bool remindersSet: false
+  Timer { id: remindersTimer; interval: 2500; onTriggered: root.remindersSet = false }
+  function setReminders() {
+    var now = Date.now()
+    root.scheduleSteps.forEach(function(step) {
+      var minutes = Math.round((step.at - now) / 60000)
+      if (minutes >= 1) Util.execArgv(["omarchy-reminder", String(minutes), "🍕 " + step.label])
+    })
+    root.remindersSet = true
+    remindersTimer.restart()
+  }
   readonly property var recipe: Calculator.computeRecipe({
     ballWeight: root.ballWeight,
     ballCount: root.ballCount,
@@ -122,6 +172,10 @@ Panel {
       yeastType: root.yeastType,
       fermentHours: root.fermentHours,
       fermentTempF: root.fermentTempF,
+      stages: root.stages,
+      scheduleOn: root.scheduleOn,
+      bakeAt: root.bakeAt,
+      nowMs: Date.now(),
       metric: root.metric,
       recipe: root.recipe
     }
@@ -151,7 +205,9 @@ Panel {
     thickness: "medium", thicknessFactorOz: Calculator.thicknessFactorOzFor("medium"),
     ballWeight: Calculator.suggestedWeightFromArea(Calculator.roundAreaIn2(12), Calculator.thicknessFactorOzFor("medium")),
     hydrationPct: 65, saltPct: 2.5, oilPct: 2, sugarPct: 1, maltPct: 0,
-    fermentTempF: 70, fermentHours: 4, yeastType: "idy"
+    fermentTempF: 70, fermentHours: 4, yeastType: "idy",
+    twoStage: false, stage2TempF: 70, stage2Hours: 3,
+    scheduleOn: false, bakeAt: Calculator.defaultBakeAt(Date.now())
   })
   // Numbers are clamped to what the controls allow; strings must be one of
   // the listed choices.
@@ -159,7 +215,7 @@ Panel {
     ballCount: [1, 24], sizeIn: [5.9, 30], panWidthIn: [3.9, 30], panLengthIn: [3.9, 30],
     thicknessFactorOz: [0.05, 0.30], ballWeight: [50, 2000],
     hydrationPct: [50, 90], saltPct: [0, 4], oilPct: [0, 10], sugarPct: [0, 5], maltPct: [0, 2],
-    fermentTempF: [33, 90], fermentHours: [1, 240],
+    fermentTempF: [33, 90], fermentHours: [1, 240], stage2TempF: [33, 90], stage2Hours: [1, 240],
     shape: ["round", "pan"], thickness: ["thin", "medium", "thick", "custom"], yeastType: ["idy", "ady", "fresh"]
   })
   readonly property string settingsJson: JSON.stringify({
@@ -168,7 +224,9 @@ Panel {
     thickness: root.thickness, thicknessFactorOz: root.thicknessFactorOz, ballWeight: root.ballWeight,
     hydrationPct: root.hydrationPct, saltPct: root.saltPct, oilPct: root.oilPct,
     sugarPct: root.sugarPct, maltPct: root.maltPct,
-    fermentTempF: root.fermentTempF, fermentHours: root.fermentHours, yeastType: root.yeastType
+    fermentTempF: root.fermentTempF, fermentHours: root.fermentHours, yeastType: root.yeastType,
+    twoStage: root.twoStage, stage2TempF: root.stage2TempF, stage2Hours: root.stage2Hours,
+    scheduleOn: root.scheduleOn, bakeAt: root.bakeAt
   }, null, 2)
   property bool settingsLoaded: false
 
@@ -200,6 +258,12 @@ Panel {
     root.fermentTempF = s.fermentTempF
     root.fermentHours = s.fermentHours
     root.yeastType = s.yeastType
+    root.twoStage = s.twoStage
+    root.stage2TempF = s.stage2TempF
+    root.stage2Hours = s.stage2Hours
+    // A saved bake time that has passed falls back to the next default one.
+    root.bakeAt = s.bakeAt > Date.now() ? s.bakeAt : Calculator.defaultBakeAt(Date.now())
+    root.scheduleOn = s.scheduleOn
     root.settingsLoaded = true
   }
 
@@ -336,17 +400,32 @@ Panel {
     }
   }
 
+  // Small caption heading a fermentation stage's controls.
+  component StageLabel: Text {
+    textFormat: Text.PlainText
+    color: Color.accent
+    font.family: Style.font.family
+    font.pixelSize: Style.font.bodySmall
+    font.bold: true
+  }
+
   // Ingredient name ........ weight, like a printed recipe card.
   component RecipeRow: Item {
     id: recipeRow
     property string label: ""
     property string amount: ""
+    // Greyed out, e.g. a schedule step that's already past.
+    property bool dim: false
+    opacity: dim ? 0.45 : 1
     width: parent.width
     implicitHeight: Math.max(nameLabel.implicitHeight, amountLabel.implicitHeight)
 
     Text {
       id: nameLabel
       anchors.left: parent.left
+      // Never runs into the amount; long names elide instead.
+      width: Math.min(implicitWidth, recipeRow.width - amountLabel.implicitWidth - Style.spacing.md)
+      elide: Text.ElideRight
       textFormat: Text.PlainText
       text: recipeRow.label
       color: Color.foreground
@@ -673,6 +752,17 @@ Panel {
           PanelSectionHeader { text: "Fermentation" }
 
           ButtonGroup {
+            options: [
+              { value: "one", label: "One stage" },
+              { value: "two", label: "Cold, then warm" }
+            ]
+            value: root.twoStage ? "two" : "one"
+            onChanged: function(v) { root.setTwoStage(v === "two") }
+          }
+
+          StageLabel { visible: root.twoStage; text: "Stage 1" }
+
+          ButtonGroup {
             // Values stay in °F; only the labels follow the units.
             options: [
               { value: "70", label: "Room temp (" + Calculator.formatTemp(70, root.metric) + ")" },
@@ -695,7 +785,7 @@ Panel {
           }
 
           NumberField {
-            label: "Target fermentation time (hours)"
+            label: root.twoStage ? "Time (hours)" : "Target fermentation time (hours)"
             value: root.fermentHours
             from: 1
             to: 240
@@ -703,15 +793,108 @@ Panel {
             onModified: function(v) { root.fermentHours = v }
           }
 
-          Dropdown {
-            label: "Yeast type"
-            value: root.yeastType
+          StageLabel { visible: root.twoStage; text: "Stage 2" }
+
+          ButtonGroup {
+            visible: root.twoStage
             options: [
-              { value: "idy", label: "Instant dry yeast" },
-              { value: "ady", label: "Active dry yeast" },
-              { value: "fresh", label: "Fresh / cake yeast" }
+              { value: "70", label: "Room temp (" + Calculator.formatTemp(70, root.metric) + ")" },
+              { value: "38", label: "Fridge (" + Calculator.formatTemp(38, root.metric) + ")" }
             ]
+            value: String(Math.round(root.stage2TempF))
+            onChanged: function(v) { root.stage2TempF = parseInt(v, 10) }
+          }
+
+          Repeater {
+            model: [root.metric]
+            NumberField {
+              visible: root.twoStage
+              label: "Temperature (" + (root.metric ? "°C" : "°F") + ")"
+              value: Math.round(Calculator.tempToDisplay(root.stage2TempF, root.metric))
+              from: root.metric ? 1 : 33
+              to: root.metric ? 32 : 90
+              stepSize: 1
+              onModified: function(v) { root.stage2TempF = Calculator.tempFromDisplay(v, root.metric) }
+            }
+          }
+
+          NumberField {
+            visible: root.twoStage
+            label: "Time (hours)"
+            value: root.stage2Hours
+            from: 1
+            to: 240
+            stepSize: 1
+            onModified: function(v) { root.stage2Hours = v }
+          }
+
+          // A ButtonGroup rather than a Dropdown: the kit's Dropdown popup
+          // opens downward, and this low in the column it ran past the
+          // panel's bottom edge, clipping the last option.
+          PanelSectionHeader { text: "Yeast type" }
+          ButtonGroup {
+            options: [
+              { value: "idy", label: "Instant" },
+              { value: "ady", label: "Active dry" },
+              { value: "fresh", label: "Fresh / cake" }
+            ]
+            value: root.yeastType
             onChanged: function(v) { root.yeastType = v }
+          }
+
+          PanelSeparator {}
+          PanelSectionHeader { text: "Schedule" }
+
+          Toggle {
+            width: parent.width
+            label: "Plan by bake time"
+            description: "Work back from when the pizza goes in the oven"
+            checked: root.scheduleOn
+            onClicked: root.setScheduleOn(!root.scheduleOn)
+          }
+
+          // Rebuilt at midnight, so "Today"/"Tomorrow" stay right.
+          Repeater {
+            model: root.scheduleOn ? [Calculator.startOfDay(root.nowMs)] : []
+            Row {
+              id: bakeRow
+              required property var modelData
+              width: panelColumn.width
+              spacing: Style.spacing.md
+              readonly property real fieldWidth: (width - spacing) / 2
+
+              NumberField {
+                label: "Bake day"
+                fieldWidth: bakeRow.fieldWidth
+                value: Math.max(0, Calculator.bakeDayOffset(root.bakeAt, root.nowMs))
+                from: 0
+                to: 14
+                field.validator: RegularExpressionValidator { regularExpression: /.*/ }
+                field.textFromValue: function(v) { return Calculator.formatDayOffset(v, bakeRow.modelData) }
+                field.valueFromText: function(t) { return Math.max(0, Math.min(14, Calculator.parseDayOffset(t, bakeRow.modelData, field.value))) }
+                onModified: function(v) {
+                  root.bakeAt = Calculator.bakeAtFrom(v, Calculator.bakeMinuteOfDay(root.bakeAt), Date.now())
+                }
+              }
+
+              NumberField {
+                label: "Bake time"
+                fieldWidth: bakeRow.fieldWidth
+                value: Calculator.bakeMinuteOfDay(root.bakeAt)
+                from: 0
+                to: 24 * 60 - 15
+                stepSize: 15
+                field.validator: RegularExpressionValidator { regularExpression: /.*/ }
+                field.textFromValue: function(v) { return Calculator.formatClock(v) }
+                field.valueFromText: function(t) {
+                  var m = Calculator.parseClock(t)
+                  return isNaN(m) ? field.value : m
+                }
+                onModified: function(v) {
+                  root.bakeAt = Calculator.bakeAtFrom(Math.max(0, Calculator.bakeDayOffset(root.bakeAt, Date.now())), v, Date.now())
+                }
+              }
+            }
           }
 
         }
@@ -744,6 +927,9 @@ Panel {
             width: parent.width
             framed: false
             stacked: true
+            // Smaller while the schedule shares the card.
+            maxPizzaSize: root.scheduleOn ? Style.space(140) : Style.space(230)
+            Behavior on maxPizzaSize { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
             shape: root.shape
             diameterIn: root.sizeIn
             panWidthIn: root.panWidthIn
@@ -774,11 +960,25 @@ Panel {
             amount: Calculator.formatGrams(root.recipe.yeastG)
           }
 
+          // The same dose by volume, for anyone without a fine scale; the
+          // grams above stay the exact figure.
+          Text {
+            width: parent.width
+            visible: text !== ""
+            horizontalAlignment: Text.AlignRight
+            textFormat: Text.PlainText
+            text: Calculator.yeastSpoonText(root.recipe.yeastG, root.yeastType)
+            color: Qt.darker(Color.foreground, 1.3)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
           Text {
             width: parent.width
             textFormat: Text.PlainText
-            text: "Ferment " + root.fermentHours + " h at " + Calculator.formatTemp(root.fermentTempF, root.metric)
-              + (root.fermentTempF <= 45 ? " (fridge)" : "")
+            wrapMode: Text.WordWrap
+            text: "Ferment " + Calculator.formatStages(root.stages, root.metric)
+              + (!root.twoStage && root.fermentTempF <= 45 ? " (fridge)" : "")
             color: Qt.darker(Color.foreground, 1.3)
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -795,6 +995,30 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
+          PanelSeparator { visible: root.scheduleOn }
+          PanelSectionHeader { visible: root.scheduleOn; text: "Schedule" }
+
+          Repeater {
+            model: root.scheduleSteps
+            RecipeRow {
+              required property var modelData
+              label: modelData.label
+              amount: Calculator.formatWhen(modelData.at, root.nowMs)
+              dim: modelData.at < root.nowMs
+            }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.scheduleLate
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: "Mixing time has already passed — move the bake later or shorten the ferment."
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
         }
 
         Row {
@@ -805,8 +1029,11 @@ Panel {
           anchors.margins: card.pad
           spacing: Style.spacing.sm
 
+          readonly property int count: root.scheduleOn ? 3 : 2
+          readonly property real buttonWidth: (width - (count - 1) * spacing) / count
+
           Button {
-            width: (parent.width - Style.spacing.sm) / 2
+            width: cardButtons.buttonWidth
             bordered: true
             iconText: "🖨️"
             text: "Print"
@@ -815,12 +1042,22 @@ Panel {
           }
 
           Button {
-            width: (parent.width - Style.spacing.sm) / 2
+            width: cardButtons.buttonWidth
             bordered: true
             iconText: root.copied ? "✓" : "📋"
             text: root.copied ? "Copied!" : "Copy"
             tooltipText: "Copy recipe as text, to paste anywhere"
             onClicked: root.copyRecipe()
+          }
+
+          Button {
+            visible: root.scheduleOn
+            width: cardButtons.buttonWidth
+            bordered: true
+            iconText: root.remindersSet ? "✓" : "🔔"
+            text: root.remindersSet ? "Set!" : "Remind"
+            tooltipText: "Desktop reminder for each upcoming step (Omarchy reminders; cleared by a reboot)"
+            onClicked: root.setReminders()
           }
         }
       }

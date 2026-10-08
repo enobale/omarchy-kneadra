@@ -14,6 +14,13 @@ recipe card.
   counter, or 2–3 days in the fridge: the yeast amount comes from a real
   fermentation chart (35–80°F), not a one-size rule of thumb, so long
   room-temperature ferments don't come out overproofed.
+- 🧊 **Cold, then warm.** Two-stage ferments (say 48 h in the fridge, then
+  3 h on the counter) get one yeast amount that accounts for both.
+- 📅 **Plan by bake time.** Say when the pizza goes in the oven and Kneadra
+  works back to when to mix, when to take the dough out of the fridge, and
+  when to preheat, and can set an Omarchy reminder for each step.
+- 🥄 **Grams and teaspoons.** Yeast shows the exact grams plus the nearest
+  measuring-spoon amount (≈ 3/8 tsp), for when the scale isn't handy.
 - 🎚️ **Change anything, see the grams change.** Settings on the left, recipe
   on the right, updating as you drag.
 - 🖨️ **Take it to the kitchen.** Print it (or save as PDF), or copy it as
@@ -45,7 +52,20 @@ interpolated between its cells; shorter or warmer ferments need more yeast,
 long ferments — including 24h+ at room temperature — need very little. If
 the time or temperature falls outside what the chart covers, a note under
 the yeast row says so. Yeast type (instant dry / active dry / fresh)
-converts the final gram amount.
+converts the final gram amount; dry yeast also shows a teaspoon measure
+(about 3.1 g per teaspoon — a 7 g packet is 2¼ tsp).
+
+Choose **Cold, then warm** for a two-stage ferment. Each stage gets its own
+temperature and time, and the yeast is the dose at which the stages together
+add up to one full proof (each stage contributes its hours ÷ the chart's
+hours-to-full-proof at that temperature).
+
+Turn on **Plan by bake time** and pick a bake day and time (type into the
+fields too: "sat", "6:30 pm", "18:30"). The card lists when to mix, when to
+move the dough between stages, when to preheat (an hour ahead), and when to
+bake; **Remind** sets a desktop reminder for each upcoming step through
+`omarchy-reminder`. Those reminders are systemd user timers, so a reboot or
+logout clears them.
 
 The recipe card shows the resulting flour, water, salt, oil, sugar,
 diastatic malt (when used), and yeast weights in grams for the total batch.
@@ -86,13 +106,14 @@ omarchy plugin remove io.github.enobale.kneadra
 - `manifest.json` — plugin manifest (`kinds: ["bar-widget"]`)
 - `BarWidget.qml` — bar icon + popup UI, built on Omarchy's `Panel` /
   `KeyboardPanel` / `WidgetButton` / `PanelSlider` / `NumberField` /
-  `ButtonGroup` / `Dropdown` components (no external dependencies beyond
+  `ButtonGroup` / `Toggle` components (no external dependencies beyond
   the Omarchy shell's own `qs.Ui` / `qs.Commons` component kit)
 - `PizzaPreview.qml` — the to-scale pizza + dough-ball illustration on the
   recipe card (a QML `Canvas`)
 - `Calculator.js` — pure dough-math helpers (dough-weight suggestion from
   pan area and Thickness Factor, temperature/time-based yeast percent,
-  baker's-percentage solve)
+  baker's-percentage solve, two-stage fermentation, teaspoon conversion,
+  bake schedule)
 
 ## License
 

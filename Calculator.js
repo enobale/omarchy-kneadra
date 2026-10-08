@@ -205,6 +205,218 @@ function fermentRangeNote(hours, tempF, metric) {
   return ""
 }
 
+// ---- two-stage fermentation ----
+// The inverse of fermentRowLookup: hours to full proof for an IDY dose on
+// one chart row (edge "long"/"short" when the dose lies past the row's
+// listed cells and the time is extrapolated).
+function fermentRowHours(row, idyPct) {
+  var last = row.idy.length - 1
+  if (idyPct < row.idy[0])
+    return { hours: row.hrs[0] * Math.pow(idyPct / row.idy[0], -FERMENT_EXTRAP_ALPHA), edge: "long" }
+  if (idyPct > row.idy[last])
+    return { hours: row.hrs[last] * Math.pow(idyPct / row.idy[last], -FERMENT_EXTRAP_ALPHA), edge: "short" }
+  for (var k = 0; k < last; k++) {
+    if (idyPct >= row.idy[k] && idyPct <= row.idy[k + 1]) {
+      var frac = (Math.log(idyPct) - Math.log(row.idy[k])) / (Math.log(row.idy[k + 1]) - Math.log(row.idy[k]))
+      return { hours: Math.exp(Math.log(row.hrs[k]) + frac * (Math.log(row.hrs[k + 1]) - Math.log(row.hrs[k]))), edge: "" }
+    }
+  }
+  return { hours: row.hrs[last], edge: "" }
+}
+
+function chartTemp(tempF) {
+  return Math.round(Math.max(FERMENT_CHART_MIN_TEMP_F, Math.min(FERMENT_CHART_MAX_TEMP_F, tempF)))
+}
+
+// IDY percent for a ferment split across stages, e.g. 48 h in the fridge
+// then 3 h at room temperature. Each stage does `hours / hoursToFullProof`
+// of the work at its temperature; the dose is the one where the stages add
+// up to exactly one full proof. One stage is a straight chart lookup.
+// stages: [{ hours, tempF }, ...]
+function fermentStagesLookup(stages) {
+  if (stages.length === 1) return fermentLookup(stages[0].hours, stages[0].tempF)
+  var rows = stages.map(function(s) { return fermentChartRow(chartTemp(s.tempF)) })
+  function work(pct) {
+    var sum = 0
+    for (var i = 0; i < stages.length; i++)
+      sum += stages[i].hours / fermentRowHours(rows[i], pct).hours
+    return sum
+  }
+  // work() rises with the dose, so bisect on log(dose).
+  var lo = Math.log(1e-6), hi = Math.log(100)
+  for (var n = 0; n < 80; n++) {
+    var mid = (lo + hi) / 2
+    if (work(Math.exp(mid)) < 1) lo = mid
+    else hi = mid
+  }
+  var pct = Math.exp((lo + hi) / 2)
+  var edge = ""
+  for (var j = 0; j < stages.length; j++) {
+    var e = fermentRowHours(rows[j], pct).edge
+    if (e !== "" && stages[j].hours > 0) edge = e
+  }
+  return { pct: pct, edge: edge }
+}
+
+function idyPercentForStages(stages) {
+  return Math.max(IDY_MIN_PCT, Math.min(IDY_MAX_PCT, fermentStagesLookup(stages).pct))
+}
+
+// fermentRangeNote() for a staged ferment.
+function fermentStagesNote(stages, metric) {
+  if (stages.length === 1) return fermentRangeNote(stages[0].hours, stages[0].tempF, metric)
+  var minT = formatTemp(FERMENT_CHART_MIN_TEMP_F, metric)
+  var maxT = formatTemp(FERMENT_CHART_MAX_TEMP_F, metric)
+  for (var i = 0; i < stages.length; i++) {
+    if (Math.round(stages[i].tempF) < FERMENT_CHART_MIN_TEMP_F)
+      return "Stage " + (i + 1) + " is colder than the fermentation chart covers (" + minT + ") — it's treated as " + minT + "."
+    if (Math.round(stages[i].tempF) > FERMENT_CHART_MAX_TEMP_F)
+      return "Stage " + (i + 1) + " is warmer than the fermentation chart covers (" + maxT + ") — it's treated as " + maxT + ", so the dose will run high."
+  }
+  var r = fermentStagesLookup(stages)
+  if (r.pct > IDY_MAX_PCT)
+    return "Too short for these temperatures — dose capped at " + IDY_MAX_PCT + "%. Try longer stages or warmer temperatures."
+  if (r.pct < IDY_MIN_PCT)
+    return "Too long for these temperatures — the dose is below " + IDY_MIN_PCT + "%. Try shorter stages or cooler temperatures."
+  if (r.edge !== "")
+    return "Partly outside what the fermentation chart covers — the dose is extrapolated."
+  return ""
+}
+
+// ---- teaspoons ----
+// Dry yeast by volume: a 7 g packet of instant or active dry yeast is
+// 2¼ tsp, so about 3.1 g per teaspoon. Fresh/cake yeast is crumbled and
+// weighed, not spooned, so it gets no volume.
+var DRY_YEAST_G_PER_TSP = 7 / 2.25
+
+function yeastTeaspoons(grams, type) {
+  if (type === "fresh" || !(grams > 0)) return NaN
+  return grams / DRY_YEAST_G_PER_TSP
+}
+
+// A spoon measure for `tsp`, rounded to what a measuring-spoon set can
+// actually hold: 1/32 and 1/16 tsp for tiny doses, eighths of a teaspoon
+// above that, and tablespoons once there are 3+ teaspoons. "" for NaN.
+function formatTeaspoons(tsp) {
+  if (!isFinite(tsp) || tsp <= 0) return ""
+  if (tsp < 1 / 48) return "under 1/32 tsp"
+  if (tsp < 3 / 64) return "≈ 1/32 tsp"
+  if (tsp < 3 / 32) return "≈ 1/16 tsp"
+  var eighths = Math.round(tsp * 8)
+  var tbsp = Math.floor(eighths / 24)
+  eighths -= tbsp * 24
+  var whole = Math.floor(eighths / 8)
+  var rest = eighths % 8
+  var frac = ["", "1/8", "1/4", "3/8", "1/2", "5/8", "3/4", "7/8"][rest]
+  var tspText = whole > 0 ? whole + (frac ? " " + frac : "") : frac
+  var parts = []
+  if (tbsp > 0) parts.push(tbsp + " tbsp")
+  if (tspText) parts.push(tspText + " tsp")
+  return "≈ " + parts.join(" + ")
+}
+
+function yeastSpoonText(grams, type) {
+  return formatTeaspoons(yeastTeaspoons(grams, type))
+}
+
+// ---- schedule ----
+var PREHEAT_MINUTES = 60
+var MS_PER_MIN = 60 * 1000
+var MS_PER_HOUR = 60 * MS_PER_MIN
+var MS_PER_DAY = 24 * MS_PER_HOUR
+
+function startOfDay(ms) {
+  var d = new Date(ms)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+// The bake time as (days from today, minute of the day) for the pickers,
+// and back. Day arithmetic goes through Date so DST days stay correct.
+function bakeDayOffset(bakeAtMs, nowMs) {
+  return Math.round((startOfDay(bakeAtMs) - startOfDay(nowMs)) / MS_PER_DAY)
+}
+function bakeMinuteOfDay(bakeAtMs) {
+  var d = new Date(bakeAtMs)
+  return d.getHours() * 60 + d.getMinutes()
+}
+function bakeAtFrom(dayOffset, minuteOfDay, nowMs) {
+  var d = new Date(startOfDay(nowMs))
+  d.setDate(d.getDate() + dayOffset)
+  d.setHours(Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0, 0)
+  return d.getTime()
+}
+
+// Default bake time: 6 PM, today if that's still far enough away to make
+// dough for, otherwise tomorrow.
+function defaultBakeAt(nowMs) {
+  var today = bakeAtFrom(0, 18 * 60, nowMs)
+  return today - nowMs > 6 * MS_PER_HOUR ? today : bakeAtFrom(1, 18 * 60, nowMs)
+}
+
+var WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+function formatClock(minuteOfDay) {
+  var h = Math.floor(minuteOfDay / 60), m = minuteOfDay % 60
+  return ((h + 11) % 12 + 1) + ":" + (m < 10 ? "0" : "") + m + (h < 12 ? " AM" : " PM")
+}
+
+function formatDayOffset(dayOffset, nowMs) {
+  if (dayOffset === 0) return "Today"
+  if (dayOffset === 1) return "Tomorrow"
+  var d = new Date(startOfDay(nowMs))
+  d.setDate(d.getDate() + dayOffset)
+  return WEEKDAYS[d.getDay()] + ", " + MONTHS[d.getMonth()] + " " + d.getDate()
+}
+
+// "Today 6:30 PM", "Tomorrow 9:00 AM", "Sat 6:00 PM" (within a week),
+// else "Oct 20 6:00 PM".
+function formatWhen(ms, nowMs) {
+  var off = bakeDayOffset(ms, nowMs)
+  var d = new Date(ms)
+  var day = off === 0 ? "Today" : off === 1 ? "Tomorrow" : off === -1 ? "Yesterday"
+    : (off > 1 && off < 7) ? WEEKDAYS[d.getDay()] : MONTHS[d.getMonth()] + " " + d.getDate()
+  return day + " " + formatClock(bakeMinuteOfDay(ms))
+}
+
+// "6:30 pm", "18:30", "6pm", "6" -> minute of the day; NaN if unreadable.
+function parseClock(text) {
+  var m = String(text).trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(a|am|p|pm)?$/)
+  if (!m) return NaN
+  var h = parseInt(m[1], 10), min = m[2] ? parseInt(m[2], 10) : 0
+  if (min > 59) return NaN
+  if (m[3]) {
+    if (h < 1 || h > 12) return NaN
+    h = h % 12 + (m[3][0] === "p" ? 12 : 0)
+  } else if (h > 23) {
+    return NaN
+  }
+  return h * 60 + min
+}
+
+// The steps from mixing to baking, working back from `bakeAtMs`.
+// stages: [{ hours, tempF }, ...]. Each step: { label, at (ms) }.
+function scheduleSteps(stages, bakeAtMs, metric) {
+  var total = 0
+  stages.forEach(function(s) { total += s.hours })
+  var steps = []
+  var t = bakeAtMs - total * MS_PER_HOUR
+  stages.forEach(function(s, i) {
+    var where = s.tempF <= 45 ? "fridge" : formatTemp(s.tempF, metric)
+    var label
+    if (i === 0) label = s.tempF <= 45 ? "Mix, into fridge" : "Mix dough"
+    else if (stages[i - 1].tempF <= 45 && s.tempF > 45) label = "Out of fridge, ball"
+    else label = "Move to " + where
+    steps.push({ label: label, at: t })
+    t += s.hours * MS_PER_HOUR
+  })
+  steps.push({ label: "Preheat oven", at: bakeAtMs - PREHEAT_MINUTES * MS_PER_MIN })
+  steps.push({ label: "Bake", at: bakeAtMs })
+  steps.sort(function(a, b) { return a.at - b.at })
+  return steps
+}
+
 // Conversion from instant dry yeast (IDY) equivalent to other yeast forms.
 // Source page states "IDY = ADY × 0.75" (i.e. ADY = IDY / 0.75) and
 // "CY (fresh) = IDY × 3" — both standard baking conversions. (Note: that
@@ -293,8 +505,22 @@ function recipeIngredientRows(input) {
   rows.push([
     "Yeast (" + yeastTypeLabel(input.yeastType) + ")",
     formatGrams(input.recipe.yeastG) + " (" + input.recipe.yeastPct.toFixed(2) + "%)"
+      + (yeastSpoonText(input.recipe.yeastG, input.yeastType) ? " " + yeastSpoonText(input.recipe.yeastG, input.yeastType) : "")
   ])
   return rows
+}
+
+// "48h at 38°F, then 3h at 70°F".
+function formatStages(stages, metric) {
+  return stages.map(function(s) { return s.hours + "h at " + formatTemp(s.tempF, metric) }).join(", then ")
+}
+
+// Schedule lines ("Fri 6:00 PM — Mix dough"), or [] with no schedule.
+function scheduleLines(input) {
+  if (!input.scheduleOn) return []
+  return scheduleSteps(input.stages, input.bakeAt, input.metric).map(function(step) {
+    return formatWhen(step.at, input.nowMs) + " — " + step.label
+  })
 }
 
 // Plain-text recipe summary, for copying to the clipboard and pasting
@@ -312,7 +538,13 @@ function formatRecipeText(input) {
     lines.push(row[0] + ": " + row[1])
   })
   lines.push("")
-  lines.push("Fermentation: " + input.fermentHours + "h at " + formatTemp(input.fermentTempF, input.metric))
+  lines.push("Fermentation: " + formatStages(input.stages, input.metric))
+  var schedule = scheduleLines(input)
+  if (schedule.length > 0) {
+    lines.push("")
+    lines.push("Schedule:")
+    schedule.forEach(function(line) { lines.push("  " + line) })
+  }
   return lines.join("\n")
 }
 
@@ -339,13 +571,17 @@ function formatRecipeHtml(input) {
     + "table{width:100%;border-collapse:collapse;margin-top:1em;}"
     + "td{padding:0.35em 0;border-bottom:1px solid #ddd;}"
     + ".amt{text-align:right;font-weight:bold;}"
+    + "h2{font-size:1.1em;margin-top:1.5em;}ul{padding-left:1.2em;}li{margin:0.3em 0;}"
     + "</style></head><body>"
     + "<h1>🍕 Kneadra</h1>"
     + "<p class=\"sub\">" + input.ballCount + " × " + input.ballWeight + "g balls — "
       + escapeHtml(sizeDescriptionFor(input)) + ", " + escapeHtml(input.thicknessLabel) + " crust</p>"
     + "<p class=\"sub\">Total dough: " + escapeHtml(formatGrams(input.recipe.totalDoughG)) + "</p>"
     + "<table>" + rowsHtml + "</table>"
-    + "<p class=\"sub\">Fermentation: " + input.fermentHours + "h at " + escapeHtml(formatTemp(input.fermentTempF, input.metric)) + "</p>"
+    + "<p class=\"sub\">Fermentation: " + escapeHtml(formatStages(input.stages, input.metric)) + "</p>"
+    + (scheduleLines(input).length > 0
+      ? "<h2>Schedule</h2><ul>" + scheduleLines(input).map(function(line) { return "<li>" + escapeHtml(line) + "</li>" }).join("") + "</ul>"
+      : "")
     + "</body></html>"
 }
 
@@ -369,4 +605,21 @@ function sanitizeSettings(saved, defaults, ranges) {
     }
   }
   return out
+}
+
+// Bake-day picker text -> days from today: "today", "tomorrow", a weekday
+// ("sat", "Saturday" — the next one), or a plain number of days. Returns
+// `fallback` for anything else.
+function parseDayOffset(text, nowMs, fallback) {
+  var t = String(text).trim().toLowerCase()
+  if (t === "today") return 0
+  if (t === "tomorrow") return 1
+  if (/^\d+$/.test(t)) return parseInt(t, 10)
+  for (var i = 0; i < 7; i++) {
+    if (t.length >= 3 && WEEKDAYS[i].toLowerCase() === t.slice(0, 3)) {
+      var today = new Date(startOfDay(nowMs)).getDay()
+      return (i - today + 7) % 7
+    }
+  }
+  return fallback
 }
