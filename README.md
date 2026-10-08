@@ -65,7 +65,7 @@ Turn on **Plan by bake time** and choose how to plan:
 - **Bake at a time** — pick a bake day and time (you can type too: "sat",
   "6:30 pm", "18:30") and the card works back to when to mix, when to move
   the dough between stages, and when to preheat (an hour ahead). A time too
-  soon for the ferment switches to Start now.
+  soon for the ferment moves to the earliest bake that works.
 - **Start now** — the dough is mixed now; the bake follows the ferment, so
   changing a stage's hours moves the bake time. **Mixed just now** resets
   the mix time.

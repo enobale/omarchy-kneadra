@@ -91,23 +91,25 @@ Panel {
   readonly property bool scheduleLate: root.scheduleMode === "bake"
     && root.scheduleSteps.length > 0 && root.scheduleSteps[0].at < root.nowMs - 5 * 60000
 
-  // Set when a picked bake time was too soon for the ferment, so the plan
-  // switched to starting now; the card says so.
+  // Set when a picked bake time was too soon for the ferment and was moved
+  // to the earliest one that works; the card says so.
   property bool bakeMoved: false
+  // Bumped when setBakeAt() lands somewhere other than the time asked for,
+  // so the day/time pickers rebuild and show it (a SpinBox keeps the
+  // number it was stepped to if the bound value doesn't change).
+  property int bakePickRev: 0
 
   // Every bake time the user picks (or causes, by lengthening the ferment)
-  // goes through here. One that's sooner than mixing right now allows
-  // becomes "start now" instead. Not applied as the clock ticks, so a plan
-  // whose mix step has passed because the dough was mixed stays put.
+  // goes through here. Sooner than mixing right now allows moves it to the
+  // earliest workable time; the mode stays "bake" either way. Not applied
+  // as the clock ticks, so a plan whose mix step has passed because the
+  // dough was mixed stays put.
   function setBakeAt(ms) {
-    if (ms < Calculator.earliestBakeAt(root.stages, Date.now())) {
-      root.startNow()
-      root.bakeMoved = true
-    } else {
-      root.bakeMoved = false
-      root.scheduleMode = "bake"
-      root.bakeAt = ms
-    }
+    var earliest = Calculator.earliestBakeAt(root.stages, Date.now())
+    root.scheduleMode = "bake"
+    root.bakeMoved = ms < earliest
+    root.bakeAt = Math.max(ms, earliest)
+    if (root.bakeMoved) root.bakePickRev++
   }
 
   function startNow() {
@@ -118,9 +120,18 @@ Panel {
   }
 
   function setScheduleMode(mode) {
-    if (mode === "start") root.startNow()
-    // Keep the current plan's bake time as the starting pick.
-    else root.setBakeAt(Math.max(root.plannedBakeAt, Calculator.defaultBakeAt(Date.now())))
+    if (mode === "start") {
+      root.startNow()
+    } else {
+      // Start the pickers from the current plan's bake time (or the usual
+      // 6 PM default, if that's later), on a whole hour, and never sooner
+      // than the ferment allows.
+      var hour = 3600000
+      var pick = Math.max(root.plannedBakeAt, Calculator.defaultBakeAt(Date.now()),
+                          Calculator.earliestBakeAt(root.stages, Date.now()))
+      root.setBakeAt(Math.ceil(pick / hour) * hour)
+      root.bakeMoved = false
+    }
   }
 
   function setScheduleOn(on) {
@@ -131,8 +142,8 @@ Panel {
     root.scheduleOn = on
   }
 
-  // Lengthening the ferment past a picked bake time switches to starting
-  // now rather than leaving a mix time in the past. ("start" mode needs
+  // Lengthening the ferment past a picked bake time moves the bake later
+  // rather than leaving a mix time in the past. ("start" mode needs
   // nothing: its bake follows the stages.)
   onStagesChanged: if (root.settingsLoaded && root.scheduleOn && root.scheduleMode === "bake") root.setBakeAt(root.bakeAt)
 
@@ -941,9 +952,10 @@ Panel {
             onClicked: root.startNow()
           }
 
-          // Rebuilt at midnight, so "Today"/"Tomorrow" stay right.
+          // Rebuilt at midnight, so "Today"/"Tomorrow" stay right, and when a
+          // pick was moved to the earliest workable bake (see bakePickRev).
           Repeater {
-            model: root.scheduleOn && root.scheduleMode === "bake" ? [Calculator.startOfDay(root.nowMs)] : []
+            model: root.scheduleOn && root.scheduleMode === "bake" ? [{ day: Calculator.startOfDay(root.nowMs), rev: root.bakePickRev }] : []
             Row {
               id: bakeRow
               required property var modelData
@@ -958,8 +970,8 @@ Panel {
                 from: 0
                 to: 14
                 field.validator: RegularExpressionValidator { regularExpression: /.*/ }
-                field.textFromValue: function(v) { return Calculator.formatDayOffset(v, bakeRow.modelData) }
-                field.valueFromText: function(t) { return Math.max(0, Math.min(14, Calculator.parseDayOffset(t, bakeRow.modelData, field.value))) }
+                field.textFromValue: function(v) { return Calculator.formatDayOffset(v, bakeRow.modelData.day) }
+                field.valueFromText: function(t) { return Math.max(0, Math.min(14, Calculator.parseDayOffset(t, bakeRow.modelData.day, field.value))) }
                 onModified: function(v) {
                   root.setBakeAt(Calculator.bakeAtFrom(v, Calculator.bakeMinuteOfDay(root.bakeAt), Date.now()))
                 }
@@ -1101,8 +1113,8 @@ Panel {
             visible: root.scheduleOn && root.bakeMoved && !root.scheduleLate
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            text: "That bake time is too soon for a " + root.totalHours
-              + " h ferment, so the plan starts now instead."
+            text: "That's too soon for a " + root.totalHours + " h ferment — moved to the earliest bake, "
+              + Calculator.formatWhen(root.plannedBakeAt, root.nowMs) + " (mix now)."
             color: Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
