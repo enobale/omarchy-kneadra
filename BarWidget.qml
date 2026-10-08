@@ -68,40 +68,73 @@ Panel {
   }
 
   // ---- schedule ----
-  // Work back from when the pizza goes in the oven. bakeAt is epoch ms.
+  // Two ways to plan, like a recipe app's timer:
+  //  - "bake": pick when the pizza goes in the oven; the steps work back
+  //    from it (bakeAt, epoch ms).
+  //  - "start": the dough was mixed at mixAt; the bake follows the ferment,
+  //    so changing a stage's hours moves the bake, not the mix.
   property bool scheduleOn: false
+  property string scheduleMode: "bake" // bake | start
   property real bakeAt: Calculator.defaultBakeAt(Date.now())
+  property real mixAt: Date.now()
   property real nowMs: Date.now()
   Timer { interval: 30000; running: true; repeat: true; onTriggered: root.nowMs = Date.now() }
   onOpenedChanged: root.nowMs = Date.now()
 
-  readonly property var scheduleSteps: root.scheduleOn ? Calculator.scheduleSteps(root.stages, root.bakeAt, root.metric) : []
-  readonly property bool scheduleLate: root.scheduleSteps.length > 0 && root.scheduleSteps[0].at < root.nowMs - 5 * 60000
+  readonly property real totalHours: root.stages.reduce(function(t, st) { return t + st.hours }, 0)
+  readonly property real plannedBakeAt: root.scheduleMode === "start"
+    ? root.mixAt + root.totalHours * 3600000
+    : root.bakeAt
+  readonly property var scheduleSteps: root.scheduleOn ? Calculator.scheduleSteps(root.stages, root.plannedBakeAt, root.metric) : []
+  // Only a picked bake time can leave the mix step behind; in "start" mode
+  // the mix step is when the dough really was mixed.
+  readonly property bool scheduleLate: root.scheduleMode === "bake"
+    && root.scheduleSteps.length > 0 && root.scheduleSteps[0].at < root.nowMs - 5 * 60000
 
-  // Set when a requested bake time was too soon for the ferment and got
-  // moved to the earliest one that works; the card says so.
+  // Set when a picked bake time was too soon for the ferment, so the plan
+  // switched to starting now; the card says so.
   property bool bakeMoved: false
 
   // Every bake time the user picks (or causes, by lengthening the ferment)
-  // goes through here: it can't be sooner than mixing right now allows.
-  // Not applied as the clock ticks, so a plan whose mix step has passed
-  // because the dough was mixed stays put.
+  // goes through here. One that's sooner than mixing right now allows
+  // becomes "start now" instead. Not applied as the clock ticks, so a plan
+  // whose mix step has passed because the dough was mixed stays put.
   function setBakeAt(ms) {
-    var earliest = Calculator.earliestBakeAt(root.stages, Date.now())
-    root.bakeMoved = ms < earliest
-    root.bakeAt = Math.max(ms, earliest)
+    if (ms < Calculator.earliestBakeAt(root.stages, Date.now())) {
+      root.startNow()
+      root.bakeMoved = true
+    } else {
+      root.bakeMoved = false
+      root.scheduleMode = "bake"
+      root.bakeAt = ms
+    }
+  }
+
+  function startNow() {
+    root.nowMs = Date.now()
+    root.bakeMoved = false
+    root.mixAt = Date.now()
+    root.scheduleMode = "start"
+  }
+
+  function setScheduleMode(mode) {
+    if (mode === "start") root.startNow()
+    // Keep the current plan's bake time as the starting pick.
+    else root.setBakeAt(Math.max(root.plannedBakeAt, Calculator.defaultBakeAt(Date.now())))
   }
 
   function setScheduleOn(on) {
     root.nowMs = Date.now()
     // A bake time left over from last time may be long gone.
-    if (on) root.setBakeAt(root.bakeAt < Date.now() ? Calculator.defaultBakeAt(Date.now()) : root.bakeAt)
+    if (on && root.scheduleMode === "bake")
+      root.setBakeAt(root.bakeAt < Date.now() ? Calculator.defaultBakeAt(Date.now()) : root.bakeAt)
     root.scheduleOn = on
   }
 
-  // Lengthening the ferment pushes the bake back rather than leaving a mix
-  // time in the past.
-  onStagesChanged: if (root.settingsLoaded && root.scheduleOn) root.setBakeAt(root.bakeAt)
+  // Lengthening the ferment past a picked bake time switches to starting
+  // now rather than leaving a mix time in the past. ("start" mode needs
+  // nothing: its bake follows the stages.)
+  onStagesChanged: if (root.settingsLoaded && root.scheduleOn && root.scheduleMode === "bake") root.setBakeAt(root.bakeAt)
 
   // One desktop reminder per upcoming step, through Omarchy's own
   // `omarchy-reminder` (they show up in its reminders indicator).
@@ -193,7 +226,7 @@ Panel {
       fermentTempF: root.fermentTempF,
       stages: root.stages,
       scheduleOn: root.scheduleOn,
-      bakeAt: root.bakeAt,
+      bakeAt: root.plannedBakeAt,
       nowMs: Date.now(),
       metric: root.metric,
       recipe: root.recipe
@@ -226,7 +259,7 @@ Panel {
     hydrationPct: 65, saltPct: 2.5, oilPct: 2, sugarPct: 1, maltPct: 0,
     fermentTempF: 70, fermentHours: 4, yeastType: "idy",
     twoStage: false, stage2TempF: 70, stage2Hours: 3,
-    scheduleOn: false, bakeAt: Calculator.defaultBakeAt(Date.now())
+    scheduleOn: false, scheduleMode: "bake", bakeAt: Calculator.defaultBakeAt(Date.now()), mixAt: 0
   })
   // Numbers are clamped to what the controls allow; strings must be one of
   // the listed choices.
@@ -235,7 +268,7 @@ Panel {
     thicknessFactorOz: [0.05, 0.30], ballWeight: [50, 2000],
     hydrationPct: [50, 90], saltPct: [0, 4], oilPct: [0, 10], sugarPct: [0, 5], maltPct: [0, 2],
     fermentTempF: [33, 90], fermentHours: [1, 240], stage2TempF: [33, 90], stage2Hours: [1, 240],
-    shape: ["round", "pan"], thickness: ["thin", "medium", "thick", "custom"], yeastType: ["idy", "ady", "fresh"]
+    shape: ["round", "pan"], thickness: ["thin", "medium", "thick", "custom"], yeastType: ["idy", "ady", "fresh"], scheduleMode: ["bake", "start"]
   })
   readonly property string settingsJson: JSON.stringify({
     version: 1, metric: root.metric, ballCount: root.ballCount, shape: root.shape,
@@ -245,7 +278,7 @@ Panel {
     sugarPct: root.sugarPct, maltPct: root.maltPct,
     fermentTempF: root.fermentTempF, fermentHours: root.fermentHours, yeastType: root.yeastType,
     twoStage: root.twoStage, stage2TempF: root.stage2TempF, stage2Hours: root.stage2Hours,
-    scheduleOn: root.scheduleOn, bakeAt: root.bakeAt
+    scheduleOn: root.scheduleOn, scheduleMode: root.scheduleMode, bakeAt: root.bakeAt, mixAt: root.mixAt
   }, null, 2)
   property bool settingsLoaded: false
 
@@ -282,6 +315,10 @@ Panel {
     root.stage2Hours = s.stage2Hours
     // A saved bake time that has passed falls back to the next default one.
     root.bakeAt = s.bakeAt > Date.now() ? s.bakeAt : Calculator.defaultBakeAt(Date.now())
+    root.mixAt = s.mixAt
+    // A started plan stays until its bake is well past; then start over.
+    var startedBake = s.mixAt + (s.fermentHours + (s.twoStage ? s.stage2Hours : 0)) * 3600000
+    root.scheduleMode = s.scheduleMode === "start" && startedBake > Date.now() - 6 * 3600000 ? "start" : "bake"
     root.scheduleOn = s.scheduleOn
     root.settingsLoaded = true
   }
@@ -872,9 +909,41 @@ Panel {
             onClicked: root.setScheduleOn(!root.scheduleOn)
           }
 
+          ButtonGroup {
+            visible: root.scheduleOn
+            options: [
+              { value: "bake", label: "Bake at a time" },
+              { value: "start", label: "Start now" }
+            ]
+            value: root.scheduleMode
+            onChanged: function(v) { root.setScheduleMode(v) }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.scheduleOn && root.scheduleMode === "start"
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: "Dough mixed " + Calculator.formatWhen(root.mixAt, root.nowMs)
+              + ". The bake follows the ferment: change a stage's hours and it moves."
+            color: Qt.darker(Color.foreground, 1.3)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Button {
+            visible: root.scheduleOn && root.scheduleMode === "start"
+            bordered: true
+            iconText: "🥣"
+            text: "Mixed just now"
+            fontSize: Style.font.bodySmall
+            tooltipText: "Reset the mix time to this moment"
+            onClicked: root.startNow()
+          }
+
           // Rebuilt at midnight, so "Today"/"Tomorrow" stay right.
           Repeater {
-            model: root.scheduleOn ? [Calculator.startOfDay(root.nowMs)] : []
+            model: root.scheduleOn && root.scheduleMode === "bake" ? [Calculator.startOfDay(root.nowMs)] : []
             Row {
               id: bakeRow
               required property var modelData
@@ -1032,9 +1101,8 @@ Panel {
             visible: root.scheduleOn && root.bakeMoved && !root.scheduleLate
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            text: "That bake time is too soon for a "
-              + root.stages.reduce(function(t, st) { return t + st.hours }, 0)
-              + " h ferment, so it's moved to the earliest one: mix now."
+            text: "That bake time is too soon for a " + root.totalHours
+              + " h ferment, so the plan starts now instead."
             color: Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
@@ -1059,7 +1127,7 @@ Panel {
             text: "Mix now"
             fontSize: Style.font.bodySmall
             tooltipText: "Move the bake to the earliest time this ferment allows"
-            onClicked: { root.nowMs = Date.now(); root.setBakeAt(0) }
+            onClicked: root.startNow()
           }
 
         }

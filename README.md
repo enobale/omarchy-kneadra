@@ -60,12 +60,17 @@ temperature and time, and the yeast is the dose at which the stages together
 add up to one full proof (each stage contributes its hours ÷ the chart's
 hours-to-full-proof at that temperature).
 
-Turn on **Plan by bake time** and pick a bake day and time (type into the
-fields too: "sat", "6:30 pm", "18:30"). The card lists when to mix, when to
-move the dough between stages, when to preheat (an hour ahead), and when to
-bake. A bake time too soon for the ferment moves to the earliest one that
-works (mix now), and if a saved plan's mix time has passed, **Mix now**
-restarts it from this moment. **Remind** sets a desktop reminder for each upcoming step through
+Turn on **Plan by bake time** and choose how to plan:
+
+- **Bake at a time** — pick a bake day and time (you can type too: "sat",
+  "6:30 pm", "18:30") and the card works back to when to mix, when to move
+  the dough between stages, and when to preheat (an hour ahead). A time too
+  soon for the ferment switches to Start now.
+- **Start now** — the dough is mixed now; the bake follows the ferment, so
+  changing a stage's hours moves the bake time. **Mixed just now** resets
+  the mix time.
+
+**Remind** sets a desktop reminder for each upcoming step through
 `omarchy-reminder`. Those reminders are systemd user timers, so a reboot or
 logout clears them.
 
