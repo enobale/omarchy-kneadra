@@ -63,7 +63,9 @@ hours-to-full-proof at that temperature).
 Turn on **Plan by bake time** and pick a bake day and time (type into the
 fields too: "sat", "6:30 pm", "18:30"). The card lists when to mix, when to
 move the dough between stages, when to preheat (an hour ahead), and when to
-bake; **Remind** sets a desktop reminder for each upcoming step through
+bake. A bake time too soon for the ferment moves to the earliest one that
+works (mix now), and if a saved plan's mix time has passed, **Mix now**
+restarts it from this moment. **Remind** sets a desktop reminder for each upcoming step through
 `omarchy-reminder`. Those reminders are systemd user timers, so a reboot or
 logout clears them.
 

@@ -380,6 +380,15 @@ function formatWhen(ms, nowMs) {
   return day + " " + formatClock(bakeMinuteOfDay(ms))
 }
 
+// The soonest the pizza can bake if the dough is mixed right now: the whole
+// ferment from now, rounded up to the next quarter hour.
+function earliestBakeAt(stages, nowMs) {
+  var total = 0
+  stages.forEach(function(s) { total += s.hours })
+  var q = 15 * MS_PER_MIN
+  return Math.ceil((nowMs + total * MS_PER_HOUR) / q) * q
+}
+
 // "6:30 pm", "18:30", "6pm", "6" -> minute of the day; NaN if unreadable.
 function parseClock(text) {
   var m = String(text).trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(a|am|p|pm)?$/)

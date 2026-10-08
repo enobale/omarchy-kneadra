@@ -78,12 +78,30 @@ Panel {
   readonly property var scheduleSteps: root.scheduleOn ? Calculator.scheduleSteps(root.stages, root.bakeAt, root.metric) : []
   readonly property bool scheduleLate: root.scheduleSteps.length > 0 && root.scheduleSteps[0].at < root.nowMs - 5 * 60000
 
+  // Set when a requested bake time was too soon for the ferment and got
+  // moved to the earliest one that works; the card says so.
+  property bool bakeMoved: false
+
+  // Every bake time the user picks (or causes, by lengthening the ferment)
+  // goes through here: it can't be sooner than mixing right now allows.
+  // Not applied as the clock ticks, so a plan whose mix step has passed
+  // because the dough was mixed stays put.
+  function setBakeAt(ms) {
+    var earliest = Calculator.earliestBakeAt(root.stages, Date.now())
+    root.bakeMoved = ms < earliest
+    root.bakeAt = Math.max(ms, earliest)
+  }
+
   function setScheduleOn(on) {
-    // A bake time left over from last time may be long gone.
-    if (on && root.bakeAt < Date.now()) root.bakeAt = Calculator.defaultBakeAt(Date.now())
     root.nowMs = Date.now()
+    // A bake time left over from last time may be long gone.
+    if (on) root.setBakeAt(root.bakeAt < Date.now() ? Calculator.defaultBakeAt(Date.now()) : root.bakeAt)
     root.scheduleOn = on
   }
+
+  // Lengthening the ferment pushes the bake back rather than leaving a mix
+  // time in the past.
+  onStagesChanged: if (root.settingsLoaded && root.scheduleOn) root.setBakeAt(root.bakeAt)
 
   // One desktop reminder per upcoming step, through Omarchy's own
   // `omarchy-reminder` (they show up in its reminders indicator).
@@ -92,7 +110,8 @@ Panel {
   function setReminders() {
     var now = Date.now()
     root.scheduleSteps.forEach(function(step) {
-      var minutes = Math.round((step.at - now) / 60000)
+      // Whole minutes only; round up so it fires on time, not a minute early.
+      var minutes = Math.ceil((step.at - now) / 60000)
       if (minutes >= 1) Util.execArgv(["omarchy-reminder", String(minutes), "🍕 " + step.label])
     })
     root.remindersSet = true
@@ -873,7 +892,7 @@ Panel {
                 field.textFromValue: function(v) { return Calculator.formatDayOffset(v, bakeRow.modelData) }
                 field.valueFromText: function(t) { return Math.max(0, Math.min(14, Calculator.parseDayOffset(t, bakeRow.modelData, field.value))) }
                 onModified: function(v) {
-                  root.bakeAt = Calculator.bakeAtFrom(v, Calculator.bakeMinuteOfDay(root.bakeAt), Date.now())
+                  root.setBakeAt(Calculator.bakeAtFrom(v, Calculator.bakeMinuteOfDay(root.bakeAt), Date.now()))
                 }
               }
 
@@ -891,7 +910,7 @@ Panel {
                   return isNaN(m) ? field.value : m
                 }
                 onModified: function(v) {
-                  root.bakeAt = Calculator.bakeAtFrom(Math.max(0, Calculator.bakeDayOffset(root.bakeAt, Date.now())), v, Date.now())
+                  root.setBakeAt(Calculator.bakeAtFrom(Math.max(0, Calculator.bakeDayOffset(root.bakeAt, Date.now())), v, Date.now()))
                 }
               }
             }
@@ -928,7 +947,7 @@ Panel {
             framed: false
             stacked: true
             // Smaller while the schedule shares the card.
-            maxPizzaSize: root.scheduleOn ? Style.space(140) : Style.space(230)
+            maxPizzaSize: !root.scheduleOn ? Style.space(230) : root.scheduleLate ? Style.space(90) : Style.space(140)
             Behavior on maxPizzaSize { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
             shape: root.shape
             diameterIn: root.sizeIn
@@ -1010,13 +1029,37 @@ Panel {
 
           Text {
             width: parent.width
-            visible: root.scheduleLate
+            visible: root.scheduleOn && root.bakeMoved && !root.scheduleLate
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            text: "Mixing time has already passed — move the bake later or shorten the ferment."
+            text: "That bake time is too soon for a "
+              + root.stages.reduce(function(t, st) { return t + st.hours }, 0)
+              + " h ferment, so it's moved to the earliest one: mix now."
             color: Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
+          }
+
+          Text {
+            width: parent.width
+            visible: root.scheduleLate
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: "Mixing time has already passed. If you haven't mixed yet, start now and bake "
+              + Calculator.formatWhen(Calculator.earliestBakeAt(root.stages, root.nowMs), root.nowMs) + "."
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Button {
+            visible: root.scheduleLate
+            bordered: true
+            iconText: "🥣"
+            text: "Mix now"
+            fontSize: Style.font.bodySmall
+            tooltipText: "Move the bake to the earliest time this ferment allows"
+            onClicked: { root.nowMs = Date.now(); root.setBakeAt(0) }
           }
 
         }
