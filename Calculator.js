@@ -302,17 +302,19 @@ function idyPercentForStages(stages) {
 
 // fermentRangeNote() for a staged ferment.
 function fermentStagesNote(stages, metric) {
-  stages = effectiveStages(stages)
   if (stages.length === 1) return fermentRangeNote(stages[0].hours, stages[0].tempF, metric)
   var minT = formatTemp(FERMENT_CHART_MIN_TEMP_F, metric)
   var maxT = formatTemp(FERMENT_CHART_MAX_TEMP_F, metric)
+  // Numbered as the user sees them (effectiveStages can drop one).
   for (var i = 0; i < stages.length; i++) {
     if (Math.round(stages[i].tempF) < FERMENT_CHART_MIN_TEMP_F)
       return "Stage " + (i + 1) + " is colder than the fermentation chart covers (" + minT + ") — it's treated as " + minT + "."
     if (Math.round(stages[i].tempF) > FERMENT_CHART_MAX_TEMP_F)
       return "Stage " + (i + 1) + " is warmer than the fermentation chart covers (" + maxT + ") — it's treated as " + maxT + ", so the dose will run high."
   }
-  var r = fermentStagesLookup(stages)
+  var eff = effectiveStages(stages)
+  if (eff.length === 1) return fermentRangeNote(eff[0].hours, eff[0].tempF, metric)
+  var r = fermentStagesLookup(eff)
   if (r.pct > IDY_MAX_PCT)
     return "Too short for these temperatures — dose capped at " + IDY_MAX_PCT + "%. Try longer stages or warmer temperatures."
   if (r.pct < IDY_MIN_PCT)
@@ -461,7 +463,7 @@ function scheduleSteps(stages, bakeAtMs, metric, poolish) {
     t += s.hours * MS_PER_HOUR
   })
   if (poolish)
-    steps.push({ label: "Mix poolish" + (poolish.tempF <= 45 ? ", chill" : ""), at: bakeAtMs - (total + poolish.hours) * MS_PER_HOUR })
+    steps.push({ label: "Mix poolish", at: bakeAtMs - (total + poolish.hours) * MS_PER_HOUR })
   steps.push({ label: "Preheat oven", at: bakeAtMs - PREHEAT_MINUTES * MS_PER_MIN })
   steps.push({ label: "Bake", at: bakeAtMs })
   steps.sort(function(a, b) { return a.at - b.at })
@@ -516,28 +518,46 @@ function poolishFlourPct(pct, hydrationPct) {
 
 // Solves baker's-percentage ingredients from a target total dough weight.
 // input: { ballWeight, ballCount, hydrationPct, saltPct, oilPct, sugarPct,
-//           maltPct, idyPct, yeastType, flours, poolish }
-// All *Pct values are percentages of flour weight (flour itself is 100%).
-// idyPct is the main dough's dose, applied to the flour added at the main
-// mix. poolish (optional): { pct (of all flour), idyPct (of its own flour) }.
+//           maltPct, idyPct, yeastType, flours, poolish, sourdough }
+// All *Pct values are percentages of all the flour (flour itself is 100%),
+// including the flour and water inside any preferment.
+// idyPct: the main dough's dose, on the flour added at the final mix.
+// poolish (optional): { pct (of all flour), idyPct (of its own flour) }.
+// sourdough (optional): { pct (starter weight, % of all flour), hydration }.
+// A sourdough starter leavens the main dough, so it gets no commercial
+// yeast; a poolish keeps its own.
 function computeRecipe(input) {
   var totalDoughG = Math.max(0, input.ballWeight * input.ballCount)
   var mult = yeastMultiplier(input.yeastType)
   var flours = normalizeFlours(input.flours)
+  var hyd = input.hydrationPct / 100
+  // Shares of all the flour (and, for water, of the flour weight too).
   var poolFrac = input.poolish ? poolishFlourPct(input.poolish.pct, input.hydrationPct) / 100 : 0
-  var mainYeastPct = input.idyPct * mult
+  var sd = input.sourdough
+  var sdHyd = sd ? Math.max(0.01, sd.hydration / 100) : 1
+  var starterWanted = sd ? Math.max(0, sd.pct / 100) : 0
+  // The starter's water and flour come out of the dough's; it can't hold
+  // more than what the poolish leaves.
+  var starterMax = sd ? Math.max(0, Math.min((hyd - poolFrac) * (1 + sdHyd) / sdHyd,
+                                             (1 - poolFrac) * (1 + sdHyd))) : 0
+  var starterFrac = Math.min(starterWanted, starterMax)
+  var sdFlourFrac = starterFrac / (1 + sdHyd)
+  var sdWaterFrac = starterFrac - sdFlourFrac
+  var mainFrac = Math.max(0, 1 - poolFrac - sdFlourFrac)
+
+  var mainYeastPct = sd ? 0 : input.idyPct * mult
   var poolYeastPct = input.poolish ? input.poolish.idyPct * mult : 0
   // Yeast as a share of all the flour: each dose on its own part.
-  var yeastPct = poolFrac * poolYeastPct + (1 - poolFrac) * mainYeastPct
+  var yeastPct = poolFrac * poolYeastPct + mainFrac * mainYeastPct
   var sumFraction = 1
-    + input.hydrationPct / 100
+    + hyd
     + input.saltPct / 100
     + input.oilPct / 100
     + input.sugarPct / 100
     + input.maltPct / 100
     + yeastPct / 100
   var flourG = sumFraction > 0 ? totalDoughG / sumFraction : 0
-  var waterG = flourG * input.hydrationPct / 100
+  var waterG = flourG * hyd
   var poolFlourG = flourG * poolFrac
   var poolish = poolFrac > 0 ? {
     flourG: poolFlourG,
@@ -546,7 +566,16 @@ function computeRecipe(input) {
     yeastPct: poolYeastPct,
     flours: splitFlours(flours, poolFlourG)
   } : null
-  var mainFlourG = flourG - poolFlourG
+  var sourdough = sd ? {
+    weightG: flourG * starterFrac,
+    flourG: flourG * sdFlourFrac,
+    waterG: flourG * sdWaterFrac,
+    pct: starterFrac * 100,
+    hydration: sd.hydration,
+    // Asked for more starter than the dough's flour/water can hold.
+    clamped: starterWanted > starterMax + 1e-9
+  } : null
+  var mainFlourG = flourG * mainFrac
   return {
     totalDoughG: totalDoughG,
     flourG: flourG,
@@ -557,12 +586,14 @@ function computeRecipe(input) {
     maltG: flourG * input.maltPct / 100,
     yeastG: flourG * yeastPct / 100,
     yeastPct: yeastPct,
-    flours: splitFlours(flours, flourG),
     poolish: poolish,
-    // What goes in at the main mix (all of it, without a poolish).
+    sourdough: sourdough,
+    // What goes in at the final mix (everything, without a preferment).
+    // The flour blend covers this and the poolish; a starter's flour is
+    // its own.
     main: {
       flourG: mainFlourG,
-      waterG: waterG - (poolish ? poolish.waterG : 0),
+      waterG: Math.max(0, waterG - (poolish ? poolish.waterG : 0) - (sourdough ? sourdough.waterG : 0)),
       yeastG: mainFlourG * mainYeastPct / 100,
       // As a share of all the flour, the usual baker's percentage.
       yeastPct: flourG > 0 ? mainFlourG * mainYeastPct / flourG : 0,
@@ -572,7 +603,7 @@ function computeRecipe(input) {
 }
 
 function formatGrams(value) {
-  if (!isFinite(value)) return "0 g"
+  if (!isFinite(value) || value < 0.005) return "0 g"
   // Two decimals below 1 g so a tiny (but real) yeast dose doesn't
   // round to a misleading "0.0 g".
   if (value < 1) return value.toFixed(2) + " g"
@@ -608,21 +639,30 @@ function yeastRow(grams, pct, type, ofWhat) {
 
 // The recipe as titled sections of rows — the card, the copied text and
 // the printed page all render this, so they can't drift apart.
-// Row: { label, amount, detail?, spoon? }. A lone section has title "".
+// Row: { label, amount, detail?, spoon?, cardLabel? (shorter label for the
+// card, which shows no detail) }. A lone section has title "".
 // input: computeRecipe()'s input plus { recipe, poolishHours, poolishTempF,
 // metric }.
 function recipeSections(input) {
   var r = input.recipe
   var p = r.poolish
+  var sd = r.sourdough
   var rest = [
-    { label: "Water", amount: formatGrams(r.main.waterG), detail: p ? "" : input.hydrationPct + "% hydration" },
+    { label: "Water", amount: formatGrams(r.main.waterG),
+      detail: p || sd ? "" : input.hydrationPct + "% hydration" },
     { label: "Salt", amount: formatGrams(r.saltG), detail: input.saltPct + "%" }
   ]
   if (input.oilPct > 0) rest.push({ label: "Oil", amount: formatGrams(r.oilG), detail: input.oilPct + "%" })
   if (input.sugarPct > 0) rest.push({ label: "Sugar", amount: formatGrams(r.sugarG), detail: input.sugarPct + "%" })
   if (input.maltPct > 0) rest.push({ label: "Diastatic malt", amount: formatGrams(r.maltG), detail: input.maltPct + "%" })
-  rest.push(yeastRow(r.main.yeastG, p ? r.main.yeastPct : r.yeastPct, input.yeastType, "all the flour"))
-  if (!p) return [{ title: "", rows: flourRows(r.flours).concat(rest) }]
+  if (sd) {
+    rest.push({ label: "Sourdough starter", cardLabel: "Sourdough starter (" + Math.round(sd.pct) + "%)",
+                amount: formatGrams(sd.weightG),
+                detail: Math.round(sd.pct) + "% of flour, " + Math.round(sd.hydration) + "% hydration, at peak" })
+  } else {
+    rest.push(yeastRow(r.main.yeastG, p ? r.main.yeastPct : r.yeastPct, input.yeastType, "all the flour"))
+  }
+  if (!p) return [{ title: "", rows: flourRows(r.main.flours).concat(rest) }]
 
   return [
     {

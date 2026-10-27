@@ -7,7 +7,7 @@
   "license": "MIT",
   "homepage": "https://github.com/enobale/omarchy-kneadra",
   "repository": "https://github.com/enobale/omarchy-kneadra",
-  "description": "Plan pizza dough right from your bar: pick size, crust, and how long it'll ferment, and get exact grams of flour, water, salt, oil, and yeast, on a live recipe card with a to-scale pizza. Handles same-day, overnight, multi-day cold, and two-stage ferments, poolish, and flour blends, and plans when to mix from the time you want to bake.",
+  "description": "Plan pizza dough right from your bar: pick size, crust, and how long it'll ferment, and get exact grams of flour, water, salt, oil, and yeast, on a live recipe card with a to-scale pizza. Handles same-day, overnight, multi-day cold, and two-stage ferments, poolish, sourdough, and flour blends, and plans when to mix from the time you want to bake.",
   "keywords": ["pizza", "dough", "recipe", "calculator", "baking", "cooking", "kitchen", "yeast", "fermentation", "cold ferment", "hydration", "neapolitan", "new york", "detroit", "sicilian", "pan pizza"],
   "kinds": ["bar-widget"],
   "entryPoints": {

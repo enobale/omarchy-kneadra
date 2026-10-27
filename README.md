@@ -18,6 +18,8 @@ recipe card.
   fridge (or the other way round) gets one yeast amount for the whole plan.
 - 🫙 **Poolish.** Ferment part of the flour ahead with the same weight of
   water; the card splits into a poolish and a final dough.
+- 🦠 **Sourdough.** Add a starter (by % of the flour and its hydration) in
+  place of commercial yeast, on its own or alongside a poolish.
 - 🌾 **Flour blends.** Up to four named flours (00 with some bread flour,
   say), each weighed out on the card.
 - 📅 **Plan by bake time.** Say when the pizza goes in the oven and Kneadra
@@ -78,6 +80,14 @@ there); the main
 fermentation's yeast is then measured against the flour added at the final
 mix. The card lists the poolish and the final dough separately, and the
 schedule adds a "Mix poolish" step.
+
+Turn on **Sourdough starter** to add a starter at its peak to the final
+dough. Set how much (starter weight as a % of all the flour; 20% is a common
+starting point) and its hydration; its flour and water count toward the
+dough's totals, and the main dough then gets no commercial yeast. A poolish
+can be used at the same time and keeps its own pinch of yeast. Kneadra
+doesn't time a sourdough for you — how fast it rises depends on the
+starter — so the ferment times you set only drive the schedule.
 
 Under **Flour**, name your flour and add up to three more; the first one
 takes whatever percentage the others leave.

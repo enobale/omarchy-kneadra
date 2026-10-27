@@ -92,6 +92,16 @@ Panel {
   readonly property real poolishIdyPct: Calculator.idyPercentForHours(root.poolishHours, root.poolishTempF)
   readonly property string poolishNote: Calculator.fermentRangeNote(root.poolishHours, root.poolishTempF, root.metric)
 
+  // ---- sourdough ----
+  // A starter at peak, mixed into the final dough in place of commercial
+  // yeast. Its amount is the baker's call: there's no published model to
+  // size it from the ferment time (Craig's lives only on a website).
+  property bool sourdoughOn: false
+  property real starterPct: 20 // starter weight, % of all the flour
+  property real starterHydration: 100
+  // Commercial yeast still in play: the main dough's, or a poolish's.
+  readonly property bool usesYeast: !root.sourdoughOn || root.poolishOn
+
   // ---- fermentation ----
   property real fermentTempF: 70
   property real fermentHours: 4
@@ -193,6 +203,12 @@ Panel {
 
   function setScheduleOn(on) {
     root.nowMs = Date.now()
+    // A started plan whose bake is long past (turned off and back on days
+    // later) starts over from a picked bake time.
+    if (on && root.scheduleMode === "start" && root.plannedBakeAt < Date.now() - 6 * 3600000) {
+      root.scheduleMode = "bake"
+      root.bakeAt = Calculator.defaultBakeAt(Date.now())
+    }
     // A bake time left over from last time may be long gone.
     if (on && root.scheduleMode === "bake")
       root.setBakeAt(root.bakeAt < Date.now() ? Calculator.defaultBakeAt(Date.now()) : root.bakeAt)
@@ -229,7 +245,8 @@ Panel {
     idyPct: root.idyPct,
     yeastType: root.yeastType,
     flours: root.flours,
-    poolish: root.poolishOn ? { pct: root.poolishPct, idyPct: root.poolishIdyPct } : null
+    poolish: root.poolishOn ? { pct: root.poolishPct, idyPct: root.poolishIdyPct } : null,
+    sourdough: root.sourdoughOn ? { pct: root.starterPct, hydration: root.starterHydration } : null
   })
   readonly property var recipeSections: Calculator.recipeSections(root.shareInput())
 
@@ -335,7 +352,8 @@ Panel {
     fermentTempF: 70, fermentHours: 4, yeastType: "idy",
     twoStage: false, stage2TempF: 70, stage2Hours: 3,
     scheduleOn: false, scheduleMode: "bake", bakeAt: Calculator.defaultBakeAt(Date.now()), mixAt: 0,
-    poolishOn: false, poolishPct: 30, poolishHours: 16, poolishTempF: 70
+    poolishOn: false, poolishPct: 30, poolishHours: 16, poolishTempF: 70,
+    sourdoughOn: false, starterPct: 20, starterHydration: 100
   })
   // Numbers are clamped to what the controls allow; strings must be one of
   // the listed choices.
@@ -345,6 +363,7 @@ Panel {
     hydrationPct: [50, 90], saltPct: [0, 4], oilPct: [0, 10], sugarPct: [0, 5], maltPct: [0, 2],
     fermentTempF: [33, 90], fermentHours: [1, 240], stage2TempF: [33, 90], stage2Hours: [1, 240],
     poolishPct: [10, 100], poolishHours: [1, 72], poolishTempF: [60, 80],
+    starterPct: [2, 50], starterHydration: [50, 125],
     shape: ["round", "pan"], thickness: ["thin", "medium", "thick", "custom"], yeastType: ["idy", "ady", "fresh"], scheduleMode: ["bake", "start"]
   })
   readonly property string settingsJson: JSON.stringify({
@@ -357,6 +376,7 @@ Panel {
     twoStage: root.twoStage, stage2TempF: root.stage2TempF, stage2Hours: root.stage2Hours,
     scheduleOn: root.scheduleOn, scheduleMode: root.scheduleMode, bakeAt: root.bakeAt, mixAt: root.mixAt,
     poolishOn: root.poolishOn, poolishPct: root.poolishPct, poolishHours: root.poolishHours, poolishTempF: root.poolishTempF,
+    sourdoughOn: root.sourdoughOn, starterPct: root.starterPct, starterHydration: root.starterHydration,
     flours: root.flours
   }, null, 2)
   property bool settingsLoaded: false
@@ -397,6 +417,9 @@ Panel {
     root.mixAt = s.mixAt
     root.poolishOn = s.poolishOn
     root.poolishPct = s.poolishPct
+    root.sourdoughOn = s.sourdoughOn
+    root.starterPct = s.starterPct
+    root.starterHydration = s.starterHydration
     root.poolishHours = s.poolishHours
     // Older versions allowed a fridge poolish; those start over at 70°F.
     root.poolishTempF = saved && saved.poolishTempF < 60 ? 70 : s.poolishTempF
@@ -438,6 +461,9 @@ Panel {
   FileView {
     id: recipeFile
     path: Quickshell.cacheDir + "/kneadra-recipe.html"
+    // Written just before xdg-open opens it; a background write could
+    // still be in flight and show the previous recipe.
+    blockWrites: true
     atomicWrites: true
     printErrors: false
   }
@@ -940,7 +966,8 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 value: root.flours[flourRow.index] ? Math.round(root.flours[flourRow.index].pct) : 0
                 from: 0
-                to: 100
+                // What the other added flours leave; the first takes the rest.
+                to: 100 - root.otherFloursPct(flourRow.index)
                 stepSize: 5
                 field.textFromValue: function(v) { return v + "%" }
                 field.valueFromText: function(t) { var n = parseInt(t, 10); return isNaN(n) ? field.value : n }
@@ -1037,6 +1064,48 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
+          Toggle {
+            width: parent.width
+            label: "Sourdough starter"
+            description: "Starter at its peak, mixed into the final dough instead of commercial yeast"
+            checked: root.sourdoughOn
+            onClicked: root.sourdoughOn = !root.sourdoughOn
+          }
+
+          LabeledSlider {
+            visible: root.sourdoughOn
+            width: parent.width
+            label: "Starter (of the flour)"
+            value: root.starterPct
+            minimum: 2; maximum: 50; step: 1; decimals: 0
+            scrollFlickable: scrollArea.contentItem
+            onMoved: function(v) { root.starterPct = v }
+          }
+
+          LabeledSlider {
+            visible: root.sourdoughOn
+            width: parent.width
+            label: "Starter hydration"
+            value: root.starterHydration
+            minimum: 50; maximum: 125; step: 5; decimals: 0
+            scrollFlickable: scrollArea.contentItem
+            onMoved: function(v) { root.starterHydration = v }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.sourdoughOn
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: root.recipe.sourdough && root.recipe.sourdough.clamped
+              ? "That's more starter than the dough's flour and water can hold, so it's using "
+                + Math.round(root.recipe.sourdough.pct) + "%."
+              : "Kneadra can't time a sourdough for you: how fast it rises depends on your starter. Set the amount from experience (20% is a common starting point)."
+            color: root.recipe.sourdough && root.recipe.sourdough.clamped ? Color.accent : Qt.darker(Color.foreground, 1.3)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
           PanelSeparator {}
           PanelSectionHeader { text: "Fermentation" }
 
@@ -1120,8 +1189,9 @@ Panel {
           // A ButtonGroup rather than a Dropdown: the kit's Dropdown popup
           // opens downward, and this low in the column it ran past the
           // panel's bottom edge, clipping the last option.
-          PanelSectionHeader { text: "Yeast type" }
+          PanelSectionHeader { visible: root.usesYeast; text: "Yeast type" }
           ButtonGroup {
+            visible: root.usesYeast
             options: [
               { value: "idy", label: "Instant" },
               { value: "ady", label: "Active dry" },
@@ -1314,7 +1384,7 @@ Panel {
                   required property var modelData
                   width: section.width
 
-                  RecipeRow { label: row.modelData.label; amount: row.modelData.amount }
+                  RecipeRow { label: row.modelData.cardLabel || row.modelData.label; amount: row.modelData.amount }
 
                   // The same dose by volume, for anyone without a fine
                   // scale; the grams above stay the exact figure.
@@ -1346,7 +1416,7 @@ Panel {
 
           Text {
             width: parent.width
-            visible: root.warmGraceHours > 0
+            visible: root.warmGraceHours > 0 && !root.sourdoughOn
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             text: "Room-temp time next to the fridge (up to " + Calculator.WARM_GRACE_HOURS
@@ -1358,7 +1428,7 @@ Panel {
 
           Text {
             width: parent.width
-            visible: root.fermentNote !== ""
+            visible: root.fermentNote !== "" && !root.sourdoughOn
             textFormat: Text.PlainText
             text: root.fermentNote
             wrapMode: Text.WordWrap
