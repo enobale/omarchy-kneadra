@@ -228,12 +228,50 @@ function chartTemp(tempF) {
   return Math.round(Math.max(FERMENT_CHART_MIN_TEMP_F, Math.min(FERMENT_CHART_MAX_TEMP_F, tempF)))
 }
 
+// A dough is "cold" (in the fridge) at or below this.
+var COLD_TEMP_F = 45
+// ...and at or above this it's at room temperature. Stages in between (a
+// cool cellar, say) always count in full.
+var ROOM_TEMP_F = 60
+// Room-temperature hours, per warm stage, that don't count against a cold
+// ferment: a bench rest before the fridge or warming up before baking.
+var WARM_GRACE_HOURS = 3
+
+function isColdStage(stage) { return stage.tempF <= COLD_TEMP_F }
+function isRoomTempStage(stage) { return stage.tempF >= ROOM_TEMP_F }
+
+// The stages as the yeast math sees them. Straight chart math says even a
+// short room-temp rest does a big share of the work (1 h at 70°F next to
+// 72 h at 38°F cuts the dose by ~20%), but bakers find chart doses for
+// cold ferments already run low and that short rests around the fridge
+// don't let you cut the yeast. So when a plan has a fridge stage, each
+// room-temp stage counts only past its first WARM_GRACE_HOURS. A practical
+// rule, not chart data.
+function effectiveStages(stages) {
+  if (stages.length < 2 || !stages.some(isColdStage)) return stages
+  var out = []
+  stages.forEach(function(s) {
+    var hours = isRoomTempStage(s) ? Math.max(0, s.hours - WARM_GRACE_HOURS) : s.hours
+    if (hours > 0) out.push({ hours: hours, tempF: s.tempF })
+  })
+  return out.length > 0 ? out : stages
+}
+
+// Hours of room-temp time left out of the yeast math by the rule above.
+function warmGraceHours(stages) {
+  if (stages.length < 2 || !stages.some(isColdStage)) return 0
+  var total = 0
+  stages.forEach(function(s) { if (isRoomTempStage(s)) total += Math.min(s.hours, WARM_GRACE_HOURS) })
+  return total
+}
+
 // IDY percent for a ferment split across stages, e.g. 48 h in the fridge
 // then 3 h at room temperature. Each stage does `hours / hoursToFullProof`
 // of the work at its temperature; the dose is the one where the stages add
 // up to exactly one full proof. One stage is a straight chart lookup.
 // stages: [{ hours, tempF }, ...]
 function fermentStagesLookup(stages) {
+  stages = effectiveStages(stages)
   if (stages.length === 1) return fermentLookup(stages[0].hours, stages[0].tempF)
   var rows = stages.map(function(s) { return fermentChartRow(chartTemp(s.tempF)) })
   function work(pct) {
@@ -264,6 +302,7 @@ function idyPercentForStages(stages) {
 
 // fermentRangeNote() for a staged ferment.
 function fermentStagesNote(stages, metric) {
+  stages = effectiveStages(stages)
   if (stages.length === 1) return fermentRangeNote(stages[0].hours, stages[0].tempF, metric)
   var minT = formatTemp(FERMENT_CHART_MIN_TEMP_F, metric)
   var maxT = formatTemp(FERMENT_CHART_MAX_TEMP_F, metric)
@@ -382,8 +421,8 @@ function formatWhen(ms, nowMs) {
 
 // The soonest the pizza can bake if the dough is mixed right now: the whole
 // ferment from now, rounded up to the next quarter hour.
-function earliestBakeAt(stages, nowMs) {
-  var total = 0
+function earliestBakeAt(stages, nowMs, extraHours) {
+  var total = extraHours || 0
   stages.forEach(function(s) { total += s.hours })
   var q = 15 * MS_PER_MIN
   return Math.ceil((nowMs + total * MS_PER_HOUR) / q) * q
@@ -405,21 +444,24 @@ function parseClock(text) {
 }
 
 // The steps from mixing to baking, working back from `bakeAtMs`.
-// stages: [{ hours, tempF }, ...]. Each step: { label, at (ms) }.
-function scheduleSteps(stages, bakeAtMs, metric) {
+// stages: [{ hours, tempF }, ...]; poolish: { hours, tempF } or null.
+// Each step: { label, at (ms) }.
+function scheduleSteps(stages, bakeAtMs, metric, poolish) {
   var total = 0
   stages.forEach(function(s) { total += s.hours })
   var steps = []
   var t = bakeAtMs - total * MS_PER_HOUR
   stages.forEach(function(s, i) {
-    var where = s.tempF <= 45 ? "fridge" : formatTemp(s.tempF, metric)
     var label
-    if (i === 0) label = s.tempF <= 45 ? "Mix, into fridge" : "Mix dough"
-    else if (stages[i - 1].tempF <= 45 && s.tempF > 45) label = "Out of fridge, ball"
-    else label = "Move to " + where
+    if (i === 0) label = "Mix dough" + (isColdStage(s) ? ", chill" : "")
+    else if (isColdStage(stages[i - 1]) && isRoomTempStage(s)) label = "Out of fridge, ball"
+    else if (isColdStage(s)) label = "Into the fridge"
+    else label = "Move to " + formatTemp(s.tempF, metric)
     steps.push({ label: label, at: t })
     t += s.hours * MS_PER_HOUR
   })
+  if (poolish)
+    steps.push({ label: "Mix poolish" + (poolish.tempF <= 45 ? ", chill" : ""), at: bakeAtMs - (total + poolish.hours) * MS_PER_HOUR })
   steps.push({ label: "Preheat oven", at: bakeAtMs - PREHEAT_MINUTES * MS_PER_MIN })
   steps.push({ label: "Bake", at: bakeAtMs })
   steps.sort(function(a, b) { return a.at - b.at })
@@ -451,13 +493,42 @@ function thicknessLabelFor(preset) {
   return "Medium"
 }
 
+// Flour blend: [{ name, pct }], percentages of all the flour. Falls back
+// to plain "Flour" for anything malformed; percentages are scaled to 100.
+function normalizeFlours(flours) {
+  var list = (Array.isArray(flours) ? flours : []).filter(function(f) {
+    return f && typeof f.name === "string" && typeof f.pct === "number" && isFinite(f.pct) && f.pct > 0
+  })
+  var sum = list.reduce(function(t, f) { return t + f.pct }, 0)
+  if (list.length === 0 || sum <= 0) return [{ name: "Flour", pct: 100 }]
+  return list.map(function(f) { return { name: f.name.trim() || "Flour", pct: f.pct * 100 / sum } })
+}
+
+function splitFlours(flours, grams) {
+  return flours.map(function(f) { return { name: f.name, pct: f.pct, g: grams * f.pct / 100 } })
+}
+
+// Poolish: a preferment of equal flour and water. `pct` of all the flour
+// goes into it (never more than the water allows, since it's 1:1).
+function poolishFlourPct(pct, hydrationPct) {
+  return Math.max(0, Math.min(pct, hydrationPct, 100))
+}
+
 // Solves baker's-percentage ingredients from a target total dough weight.
 // input: { ballWeight, ballCount, hydrationPct, saltPct, oilPct, sugarPct,
-//           maltPct, idyPct, yeastType }
+//           maltPct, idyPct, yeastType, flours, poolish }
 // All *Pct values are percentages of flour weight (flour itself is 100%).
+// idyPct is the main dough's dose, applied to the flour added at the main
+// mix. poolish (optional): { pct (of all flour), idyPct (of its own flour) }.
 function computeRecipe(input) {
   var totalDoughG = Math.max(0, input.ballWeight * input.ballCount)
-  var yeastPct = input.idyPct * yeastMultiplier(input.yeastType)
+  var mult = yeastMultiplier(input.yeastType)
+  var flours = normalizeFlours(input.flours)
+  var poolFrac = input.poolish ? poolishFlourPct(input.poolish.pct, input.hydrationPct) / 100 : 0
+  var mainYeastPct = input.idyPct * mult
+  var poolYeastPct = input.poolish ? input.poolish.idyPct * mult : 0
+  // Yeast as a share of all the flour: each dose on its own part.
+  var yeastPct = poolFrac * poolYeastPct + (1 - poolFrac) * mainYeastPct
   var sumFraction = 1
     + input.hydrationPct / 100
     + input.saltPct / 100
@@ -466,16 +537,37 @@ function computeRecipe(input) {
     + input.maltPct / 100
     + yeastPct / 100
   var flourG = sumFraction > 0 ? totalDoughG / sumFraction : 0
+  var waterG = flourG * input.hydrationPct / 100
+  var poolFlourG = flourG * poolFrac
+  var poolish = poolFrac > 0 ? {
+    flourG: poolFlourG,
+    waterG: poolFlourG,
+    yeastG: poolFlourG * poolYeastPct / 100,
+    yeastPct: poolYeastPct,
+    flours: splitFlours(flours, poolFlourG)
+  } : null
+  var mainFlourG = flourG - poolFlourG
   return {
     totalDoughG: totalDoughG,
     flourG: flourG,
-    waterG: flourG * input.hydrationPct / 100,
+    waterG: waterG,
     saltG: flourG * input.saltPct / 100,
     oilG: flourG * input.oilPct / 100,
     sugarG: flourG * input.sugarPct / 100,
     maltG: flourG * input.maltPct / 100,
     yeastG: flourG * yeastPct / 100,
-    yeastPct: yeastPct
+    yeastPct: yeastPct,
+    flours: splitFlours(flours, flourG),
+    poolish: poolish,
+    // What goes in at the main mix (all of it, without a poolish).
+    main: {
+      flourG: mainFlourG,
+      waterG: waterG - (poolish ? poolish.waterG : 0),
+      yeastG: mainFlourG * mainYeastPct / 100,
+      // As a share of all the flour, the usual baker's percentage.
+      yeastPct: flourG > 0 ? mainFlourG * mainYeastPct / flourG : 0,
+      flours: splitFlours(flours, mainFlourG)
+    }
   }
 }
 
@@ -497,26 +589,60 @@ function sizeDescriptionFor(input) {
   return formatLength(input.sizeIn, input.metric) + " round"
 }
 
-// Builds the ingredient rows shared by the plain-text and HTML recipe
-// renderers, so the two formats can't drift apart.
-// input: same shape as computeRecipe()'s input, plus { recipe } (the
-// already-computed result) and { shape, sizeIn, panWidthIn, panLengthIn,
-// thicknessLabel, ballCount, ballWeight, fermentHours, fermentTempF, metric }.
-function recipeIngredientRows(input) {
-  var rows = [
-    ["Flour", formatGrams(input.recipe.flourG)],
-    ["Water", formatGrams(input.recipe.waterG) + " (" + input.hydrationPct + "% hydration)"],
-    ["Salt", formatGrams(input.recipe.saltG) + " (" + input.saltPct + "%)"]
+function flourRows(parts) {
+  return parts.map(function(f) {
+    var label = f.name.toLowerCase() === "flour" ? "Flour" : "Flour (" + f.name + ")"
+    return { label: label, amount: formatGrams(f.g),
+             detail: parts.length > 1 ? Math.round(f.pct) + "% of flour" : "" }
+  })
+}
+
+function yeastRow(grams, pct, type, ofWhat) {
+  return {
+    label: "Yeast (" + yeastTypeLabel(type) + ", " + pct.toFixed(pct < 0.1 ? 3 : 2) + "%)",
+    amount: formatGrams(grams),
+    detail: pct.toFixed(pct < 0.1 ? 3 : 2) + "% of " + ofWhat,
+    spoon: yeastSpoonText(grams, type)
+  }
+}
+
+// The recipe as titled sections of rows — the card, the copied text and
+// the printed page all render this, so they can't drift apart.
+// Row: { label, amount, detail?, spoon? }. A lone section has title "".
+// input: computeRecipe()'s input plus { recipe, poolishHours, poolishTempF,
+// metric }.
+function recipeSections(input) {
+  var r = input.recipe
+  var p = r.poolish
+  var rest = [
+    { label: "Water", amount: formatGrams(r.main.waterG), detail: p ? "" : input.hydrationPct + "% hydration" },
+    { label: "Salt", amount: formatGrams(r.saltG), detail: input.saltPct + "%" }
   ]
-  if (input.oilPct > 0) rows.push(["Oil", formatGrams(input.recipe.oilG) + " (" + input.oilPct + "%)"])
-  if (input.sugarPct > 0) rows.push(["Sugar", formatGrams(input.recipe.sugarG) + " (" + input.sugarPct + "%)"])
-  if (input.maltPct > 0) rows.push(["Diastatic malt", formatGrams(input.recipe.maltG) + " (" + input.maltPct + "%)"])
-  rows.push([
-    "Yeast (" + yeastTypeLabel(input.yeastType) + ")",
-    formatGrams(input.recipe.yeastG) + " (" + input.recipe.yeastPct.toFixed(2) + "%)"
-      + (yeastSpoonText(input.recipe.yeastG, input.yeastType) ? " " + yeastSpoonText(input.recipe.yeastG, input.yeastType) : "")
-  ])
-  return rows
+  if (input.oilPct > 0) rest.push({ label: "Oil", amount: formatGrams(r.oilG), detail: input.oilPct + "%" })
+  if (input.sugarPct > 0) rest.push({ label: "Sugar", amount: formatGrams(r.sugarG), detail: input.sugarPct + "%" })
+  if (input.maltPct > 0) rest.push({ label: "Diastatic malt", amount: formatGrams(r.maltG), detail: input.maltPct + "%" })
+  rest.push(yeastRow(r.main.yeastG, p ? r.main.yeastPct : r.yeastPct, input.yeastType, "all the flour"))
+  if (!p) return [{ title: "", rows: flourRows(r.flours).concat(rest) }]
+
+  return [
+    {
+      title: "Poolish — mix " + input.poolishHours + " h ahead, " + formatTemp(input.poolishTempF, input.metric),
+      rows: flourRows(p.flours).concat([
+        { label: "Water", amount: formatGrams(p.waterG), detail: "same as the flour" },
+        yeastRow(p.yeastG, p.yeastPct, input.yeastType, "the poolish flour")
+      ])
+    },
+    {
+      title: "Final dough",
+      rows: [{ label: "Poolish (all of it)", amount: formatGrams(p.flourG + p.waterG + p.yeastG), detail: "" }]
+        .concat(flourRows(r.main.flours)).concat(rest)
+    }
+  ]
+}
+
+function rowText(row) {
+  var extras = [row.detail, row.spoon].filter(function(x) { return x })
+  return row.amount + (extras.length > 0 ? " (" + extras.join(", ") + ")" : "")
 }
 
 // "48h at 38°F, then 3h at 70°F".
@@ -527,7 +653,7 @@ function formatStages(stages, metric) {
 // Schedule lines ("Fri 6:00 PM — Mix dough"), or [] with no schedule.
 function scheduleLines(input) {
   if (!input.scheduleOn) return []
-  return scheduleSteps(input.stages, input.bakeAt, input.metric).map(function(step) {
+  return scheduleSteps(input.stages, input.bakeAt, input.metric, input.poolishStage).map(function(step) {
     return formatWhen(step.at, input.nowMs) + " — " + step.label
   })
 }
@@ -543,11 +669,16 @@ function formatRecipeText(input) {
     "Total dough: " + formatGrams(input.recipe.totalDoughG),
     ""
   ]
-  recipeIngredientRows(input).forEach(function(row) {
-    lines.push(row[0] + ": " + row[1])
+  recipeSections(input).forEach(function(section, i) {
+    if (section.title) lines.push((i > 0 ? "\n" : "") + section.title + ":")
+    section.rows.forEach(function(row) {
+      lines.push((section.title ? "  " : "") + row.label.replace(/, [0-9.]+%\)$/, ")") + ": " + rowText(row))
+    })
   })
   lines.push("")
   lines.push("Fermentation: " + formatStages(input.stages, input.metric))
+  if (input.flours && normalizeFlours(input.flours).length > 1)
+    lines.push("Flour blend: " + normalizeFlours(input.flours).map(function(f) { return Math.round(f.pct) + "% " + f.name }).join(", "))
   var schedule = scheduleLines(input)
   if (schedule.length > 0) {
     lines.push("")
@@ -569,8 +700,11 @@ function escapeHtml(value) {
 // print dialog — printer selection and "Save as PDF" — without Kneadra
 // needing to talk to CUPS or any print stack itself.
 function formatRecipeHtml(input) {
-  var rowsHtml = recipeIngredientRows(input).map(function(row) {
-    return "<tr><td>" + escapeHtml(row[0]) + "</td><td class=\"amt\">" + escapeHtml(row[1]) + "</td></tr>"
+  var rowsHtml = recipeSections(input).map(function(section) {
+    return (section.title ? "<tr><th colspan=\"2\">" + escapeHtml(section.title) + "</th></tr>" : "")
+      + section.rows.map(function(row) {
+        return "<tr><td>" + escapeHtml(row.label.replace(/, [0-9.]+%\)$/, ")")) + "</td><td class=\"amt\">" + escapeHtml(rowText(row)) + "</td></tr>"
+      }).join("")
   }).join("")
 
   return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Kneadra Recipe</title><style>"
@@ -580,6 +714,7 @@ function formatRecipeHtml(input) {
     + "table{width:100%;border-collapse:collapse;margin-top:1em;}"
     + "td{padding:0.35em 0;border-bottom:1px solid #ddd;}"
     + ".amt{text-align:right;font-weight:bold;}"
+    + "th{text-align:left;padding:1em 0 0.3em;font-size:0.95em;color:#555;border-bottom:2px solid #ccc;}"
     + "h2{font-size:1.1em;margin-top:1.5em;}ul{padding-left:1.2em;}li{margin:0.3em 0;}"
     + "</style></head><body>"
     + "<h1>🍕 Kneadra</h1>"

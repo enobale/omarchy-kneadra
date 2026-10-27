@@ -14,8 +14,12 @@ recipe card.
   counter, or 2–3 days in the fridge: the yeast amount comes from a real
   fermentation chart (35–80°F), not a one-size rule of thumb, so long
   room-temperature ferments don't come out overproofed.
-- 🧊 **Cold, then warm.** Two-stage ferments (say 48 h in the fridge, then
-  3 h on the counter) get one yeast amount that accounts for both.
+- 🧊 **Two-stage ferments.** An hour on the counter, then 72 h in the
+  fridge (or the other way round) gets one yeast amount for the whole plan.
+- 🫙 **Poolish.** Ferment part of the flour ahead with the same weight of
+  water; the card splits into a poolish and a final dough.
+- 🌾 **Flour blends.** Up to four named flours (00 with some bread flour,
+  say), each weighed out on the card.
 - 📅 **Plan by bake time.** Say when the pizza goes in the oven and Kneadra
   works back to when to mix, when to take the dough out of the fridge, and
   when to preheat, and can set an Omarchy reminder for each step.
@@ -55,10 +59,24 @@ the yeast row says so. Yeast type (instant dry / active dry / fresh)
 converts the final gram amount; dry yeast also shows a teaspoon measure
 (about 3.1 g per teaspoon — a 7 g packet is 2¼ tsp).
 
-Choose **Cold, then warm** for a two-stage ferment. Each stage gets its own
+Choose **Two stages** for a two-stage ferment. Each stage gets its own
 temperature and time, and the yeast is the dose at which the stages together
 add up to one full proof (each stage contributes its hours ÷ the chart's
-hours-to-full-proof at that temperature).
+hours-to-full-proof at that temperature). One practical exception: next to
+a fridge stage, the first 3 h of each room-temperature (60°F+) stage don't
+count, so a bench rest or warm-up doesn't cut the cold-ferment yeast. Chart
+doses for cold ferments already run low in practice, as bakers on the Pizza
+Making Forum report; this is a rule of thumb, not chart data.
+
+Turn on **Poolish** to ferment part of the flour (10% up to the dough's
+hydration) ahead of time with an equal weight of water. Its yeast comes from
+the same chart, for the poolish's own time and temperature; the main
+fermentation's yeast is then measured against the flour added at the final
+mix. The card lists the poolish and the final dough separately, and the
+schedule adds a "Mix poolish" step.
+
+Under **Flour**, name your flour and add up to three more; the first one
+takes whatever percentage the others leave.
 
 Turn on **Plan by bake time** and choose how to plan:
 

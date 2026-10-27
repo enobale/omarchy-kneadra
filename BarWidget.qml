@@ -41,6 +41,57 @@ Panel {
   // Diastatic malt powder: optional, only for extra browning in a home oven.
   property real maltPct: 0
 
+  // ---- flour blend ----
+  // [{ name, pct }]; the first flour's pct is always the rest of 100%.
+  property var flours: [{ name: "Flour", pct: 100 }]
+  readonly property int maxFlours: 4
+
+  function otherFloursPct(except) {
+    var t = 0
+    for (var i = 1; i < root.flours.length; i++) if (i !== except) t += root.flours[i].pct
+    return t
+  }
+  // Every change goes through a fresh array so bindings see it.
+  function setFlours(list) {
+    var rest = 0
+    for (var i = 1; i < list.length; i++) rest += list[i].pct
+    list[0] = { name: list[0].name, pct: Math.max(0, 100 - rest) }
+    root.flours = list
+  }
+  function addFlour() {
+    if (root.flours.length >= root.maxFlours) return
+    var list = root.flours.slice()
+    // Take the new flour's share from the first flour, up to 20%.
+    var share = Math.min(20, Math.max(0, list[0].pct - 5))
+    list.push({ name: ["Bread", "Whole wheat", "Semolina"][list.length - 1], pct: share })
+    root.setFlours(list)
+  }
+  function removeFlour(i) {
+    var list = root.flours.slice()
+    list.splice(i, 1)
+    root.setFlours(list)
+  }
+  function setFlourName(i, name) {
+    var list = root.flours.slice()
+    list[i] = { name: name, pct: list[i].pct }
+    root.flours = list
+  }
+  function setFlourPct(i, pct) {
+    var list = root.flours.slice()
+    list[i] = { name: list[i].name, pct: Math.max(0, Math.min(pct, 100 - root.otherFloursPct(i))) }
+    root.setFlours(list)
+  }
+
+  // ---- poolish ----
+  // A preferment of equal flour and water, mixed hours ahead with its own
+  // small dose of yeast, then added to the final dough.
+  property bool poolishOn: false
+  property real poolishPct: 30 // of all the flour
+  property real poolishHours: 16
+  property real poolishTempF: 70
+  readonly property real poolishIdyPct: Calculator.idyPercentForHours(root.poolishHours, root.poolishTempF)
+  readonly property string poolishNote: Calculator.fermentRangeNote(root.poolishHours, root.poolishTempF, root.metric)
+
   // ---- fermentation ----
   property real fermentTempF: 70
   property real fermentHours: 4
@@ -56,6 +107,8 @@ Panel {
     : [{ hours: root.fermentHours, tempF: root.fermentTempF }]
   readonly property real idyPct: Calculator.idyPercentForStages(root.stages)
   readonly property string fermentNote: Calculator.fermentStagesNote(root.stages, root.metric)
+  // Room-temp hours the yeast math leaves out (see Calculator.effectiveStages).
+  readonly property real warmGraceHours: Calculator.warmGraceHours(root.stages)
 
   function setTwoStage(on) {
     // Two stages almost always means cold first, so start stage 1 in the
@@ -82,10 +135,14 @@ Panel {
   onOpenedChanged: root.nowMs = Date.now()
 
   readonly property real totalHours: root.stages.reduce(function(t, st) { return t + st.hours }, 0)
+  // From the first thing mixed (the poolish, if any) to the bake.
+  readonly property real poolishLeadHours: root.poolishOn ? root.poolishHours : 0
+  readonly property real leadHours: root.totalHours + root.poolishLeadHours
+  readonly property var poolishStage: root.poolishOn ? { hours: root.poolishHours, tempF: root.poolishTempF } : null
   readonly property real plannedBakeAt: root.scheduleMode === "start"
-    ? root.mixAt + root.totalHours * 3600000
+    ? root.mixAt + root.leadHours * 3600000
     : root.bakeAt
-  readonly property var scheduleSteps: root.scheduleOn ? Calculator.scheduleSteps(root.stages, root.plannedBakeAt, root.metric) : []
+  readonly property var scheduleSteps: root.scheduleOn ? Calculator.scheduleSteps(root.stages, root.plannedBakeAt, root.metric, root.poolishStage) : []
   // Only a picked bake time can leave the mix step behind; in "start" mode
   // the mix step is when the dough really was mixed.
   readonly property bool scheduleLate: root.scheduleMode === "bake"
@@ -105,7 +162,7 @@ Panel {
   // as the clock ticks, so a plan whose mix step has passed because the
   // dough was mixed stays put.
   function setBakeAt(ms) {
-    var earliest = Calculator.earliestBakeAt(root.stages, Date.now())
+    var earliest = Calculator.earliestBakeAt(root.stages, Date.now(), root.poolishLeadHours)
     root.scheduleMode = "bake"
     root.bakeMoved = ms < earliest
     root.bakeAt = Math.max(ms, earliest)
@@ -128,7 +185,7 @@ Panel {
       // than the ferment allows.
       var hour = 3600000
       var pick = Math.max(root.plannedBakeAt, Calculator.defaultBakeAt(Date.now()),
-                          Calculator.earliestBakeAt(root.stages, Date.now()))
+                          Calculator.earliestBakeAt(root.stages, Date.now(), root.poolishLeadHours))
       root.setBakeAt(Math.ceil(pick / hour) * hour)
       root.bakeMoved = false
     }
@@ -145,7 +202,7 @@ Panel {
   // Lengthening the ferment past a picked bake time moves the bake later
   // rather than leaving a mix time in the past. ("start" mode needs
   // nothing: its bake follows the stages.)
-  onStagesChanged: if (root.settingsLoaded && root.scheduleOn && root.scheduleMode === "bake") root.setBakeAt(root.bakeAt)
+  onLeadHoursChanged: if (root.settingsLoaded && root.scheduleOn && root.scheduleMode === "bake") root.setBakeAt(root.bakeAt)
 
   // One desktop reminder per upcoming step, through Omarchy's own
   // `omarchy-reminder` (they show up in its reminders indicator).
@@ -170,8 +227,11 @@ Panel {
     sugarPct: root.sugarPct,
     maltPct: root.maltPct,
     idyPct: root.idyPct,
-    yeastType: root.yeastType
+    yeastType: root.yeastType,
+    flours: root.flours,
+    poolish: root.poolishOn ? { pct: root.poolishPct, idyPct: root.poolishIdyPct } : null
   })
+  readonly property var recipeSections: Calculator.recipeSections(root.shareInput())
 
   function recomputeBallWeight() {
     root.ballWeight = Calculator.suggestedWeightFromArea(root.areaIn2, root.thicknessFactorOz)
@@ -236,6 +296,10 @@ Panel {
       fermentHours: root.fermentHours,
       fermentTempF: root.fermentTempF,
       stages: root.stages,
+      flours: root.flours,
+      poolishHours: root.poolishHours,
+      poolishTempF: root.poolishTempF,
+      poolishStage: root.poolishStage,
       scheduleOn: root.scheduleOn,
       bakeAt: root.plannedBakeAt,
       nowMs: Date.now(),
@@ -270,7 +334,8 @@ Panel {
     hydrationPct: 65, saltPct: 2.5, oilPct: 2, sugarPct: 1, maltPct: 0,
     fermentTempF: 70, fermentHours: 4, yeastType: "idy",
     twoStage: false, stage2TempF: 70, stage2Hours: 3,
-    scheduleOn: false, scheduleMode: "bake", bakeAt: Calculator.defaultBakeAt(Date.now()), mixAt: 0
+    scheduleOn: false, scheduleMode: "bake", bakeAt: Calculator.defaultBakeAt(Date.now()), mixAt: 0,
+    poolishOn: false, poolishPct: 30, poolishHours: 16, poolishTempF: 70
   })
   // Numbers are clamped to what the controls allow; strings must be one of
   // the listed choices.
@@ -279,6 +344,7 @@ Panel {
     thicknessFactorOz: [0.05, 0.30], ballWeight: [50, 2000],
     hydrationPct: [50, 90], saltPct: [0, 4], oilPct: [0, 10], sugarPct: [0, 5], maltPct: [0, 2],
     fermentTempF: [33, 90], fermentHours: [1, 240], stage2TempF: [33, 90], stage2Hours: [1, 240],
+    poolishPct: [10, 100], poolishHours: [1, 72], poolishTempF: [33, 90],
     shape: ["round", "pan"], thickness: ["thin", "medium", "thick", "custom"], yeastType: ["idy", "ady", "fresh"], scheduleMode: ["bake", "start"]
   })
   readonly property string settingsJson: JSON.stringify({
@@ -289,7 +355,9 @@ Panel {
     sugarPct: root.sugarPct, maltPct: root.maltPct,
     fermentTempF: root.fermentTempF, fermentHours: root.fermentHours, yeastType: root.yeastType,
     twoStage: root.twoStage, stage2TempF: root.stage2TempF, stage2Hours: root.stage2Hours,
-    scheduleOn: root.scheduleOn, scheduleMode: root.scheduleMode, bakeAt: root.bakeAt, mixAt: root.mixAt
+    scheduleOn: root.scheduleOn, scheduleMode: root.scheduleMode, bakeAt: root.bakeAt, mixAt: root.mixAt,
+    poolishOn: root.poolishOn, poolishPct: root.poolishPct, poolishHours: root.poolishHours, poolishTempF: root.poolishTempF,
+    flours: root.flours
   }, null, 2)
   property bool settingsLoaded: false
 
@@ -327,8 +395,19 @@ Panel {
     // A saved bake time that has passed falls back to the next default one.
     root.bakeAt = s.bakeAt > Date.now() ? s.bakeAt : Calculator.defaultBakeAt(Date.now())
     root.mixAt = s.mixAt
+    root.poolishOn = s.poolishOn
+    root.poolishPct = s.poolishPct
+    root.poolishHours = s.poolishHours
+    root.poolishTempF = s.poolishTempF
+    // Arrays aren't covered by sanitizeSettings; check each flour here.
+    var savedFlours = saved && Array.isArray(saved.flours) ? saved.flours.filter(function(f) {
+      return f && typeof f.name === "string" && typeof f.pct === "number" && isFinite(f.pct)
+    }).slice(0, root.maxFlours).map(function(f) {
+      return { name: f.name.slice(0, 24), pct: Math.max(0, Math.min(100, f.pct)) }
+    }) : []
+    if (savedFlours.length > 0) root.setFlours(savedFlours)
     // A started plan stays until its bake is well past; then start over.
-    var startedBake = s.mixAt + (s.fermentHours + (s.twoStage ? s.stage2Hours : 0)) * 3600000
+    var startedBake = s.mixAt + (s.fermentHours + (s.twoStage ? s.stage2Hours : 0) + (s.poolishOn ? s.poolishHours : 0)) * 3600000
     root.scheduleMode = s.scheduleMode === "start" && startedBake > Date.now() - 6 * 3600000 ? "start" : "bake"
     root.scheduleOn = s.scheduleOn
     root.settingsLoaded = true
@@ -816,12 +895,158 @@ Panel {
           }
 
           PanelSeparator {}
+          PanelSectionHeader { text: "Flour" }
+
+          // Count-based model, so typing a name doesn't rebuild the rows.
+          Repeater {
+            model: root.flours.length
+            Row {
+              id: flourRow
+              required property int index
+              width: panelColumn.width
+              spacing: Style.spacing.md
+              readonly property real pctWidth: Style.space(110)
+              readonly property real removeWidth: Style.space(34)
+
+              TextField {
+                width: flourRow.width - flourRow.pctWidth - flourRow.removeWidth - 2 * flourRow.spacing
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.flours[flourRow.index] ? root.flours[flourRow.index].name : ""
+                placeholderText: "Flour name"
+                maximumLength: 24
+                onTextEdited: root.setFlourName(flourRow.index, text)
+              }
+
+              // The first flour is whatever the others leave of 100%.
+              Text {
+                visible: flourRow.index === 0
+                width: flourRow.pctWidth
+                anchors.verticalCenter: parent.verticalCenter
+                horizontalAlignment: Text.AlignHCenter
+                textFormat: Text.PlainText
+                text: root.flours.length > 1 ? Math.round(root.flours[0].pct) + "%" : "100%"
+                color: Qt.darker(Color.foreground, 1.2)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              NumberField {
+                visible: flourRow.index > 0
+                fieldWidth: flourRow.pctWidth
+                anchors.verticalCenter: parent.verticalCenter
+                value: root.flours[flourRow.index] ? Math.round(root.flours[flourRow.index].pct) : 0
+                from: 0
+                to: 100
+                stepSize: 5
+                field.textFromValue: function(v) { return v + "%" }
+                field.valueFromText: function(t) { var n = parseInt(t, 10); return isNaN(n) ? field.value : n }
+                field.validator: RegularExpressionValidator { regularExpression: /\s*\d{0,3}\s*%?\s*/ }
+                onModified: function(v) { root.setFlourPct(flourRow.index, v) }
+              }
+
+              Button {
+                visible: flourRow.index > 0
+                width: flourRow.removeWidth
+                anchors.verticalCenter: parent.verticalCenter
+                text: "✕"
+                tooltipText: "Remove this flour"
+                onClicked: root.removeFlour(flourRow.index)
+              }
+            }
+          }
+
+          Button {
+            visible: root.flours.length < root.maxFlours
+            bordered: true
+            text: "+ Add a flour"
+            fontSize: Style.font.bodySmall
+            tooltipText: "Blend flours, e.g. 00 with some bread or whole-wheat flour"
+            onClicked: root.addFlour()
+          }
+
+          PanelSeparator {}
+          PanelSectionHeader { text: "Preferment" }
+
+          Toggle {
+            width: parent.width
+            label: "Poolish"
+            description: "Part of the flour, with the same weight of water and a pinch of yeast, fermented ahead"
+            checked: root.poolishOn
+            onClicked: root.poolishOn = !root.poolishOn
+          }
+
+          LabeledSlider {
+            visible: root.poolishOn
+            width: parent.width
+            label: "Flour in the poolish"
+            value: root.poolishPct
+            minimum: 10; maximum: Math.min(100, Math.floor(root.hydrationPct / 5) * 5); step: 5; decimals: 0
+            scrollFlickable: scrollArea.contentItem
+            onMoved: function(v) { root.poolishPct = v }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.poolishOn && root.poolishPct > root.hydrationPct
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: "A 1:1 poolish can't hold more flour than the dough has water, so it's using "
+              + Math.round(root.hydrationPct) + "%."
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          ButtonGroup {
+            visible: root.poolishOn
+            options: [
+              { value: "70", label: "Room temp (" + Calculator.formatTemp(70, root.metric) + ")" },
+              { value: "38", label: "Fridge (" + Calculator.formatTemp(38, root.metric) + ")" }
+            ]
+            value: String(Math.round(root.poolishTempF))
+            onChanged: function(v) { root.poolishTempF = parseInt(v, 10) }
+          }
+
+          Repeater {
+            model: root.poolishOn ? [root.metric] : []
+            NumberField {
+              label: "Poolish temperature (" + (root.metric ? "°C" : "°F") + ")"
+              value: Math.round(Calculator.tempToDisplay(root.poolishTempF, root.metric))
+              from: root.metric ? 1 : 33
+              to: root.metric ? 32 : 90
+              stepSize: 1
+              onModified: function(v) { root.poolishTempF = Calculator.tempFromDisplay(v, root.metric) }
+            }
+          }
+
+          NumberField {
+            visible: root.poolishOn
+            label: "Poolish time (hours)"
+            value: root.poolishHours
+            from: 1
+            to: 72
+            stepSize: 1
+            onModified: function(v) { root.poolishHours = v }
+          }
+
+          Text {
+            width: parent.width
+            visible: root.poolishOn && root.poolishNote !== ""
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: root.poolishNote
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          PanelSeparator {}
           PanelSectionHeader { text: "Fermentation" }
 
           ButtonGroup {
             options: [
               { value: "one", label: "One stage" },
-              { value: "two", label: "Cold, then warm" }
+              { value: "two", label: "Two stages" }
             ]
             value: root.twoStage ? "two" : "one"
             onChanged: function(v) { root.setTwoStage(v === "two") }
@@ -1015,12 +1240,31 @@ Panel {
         border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.1)
         clip: true
 
-        Column {
-          id: cardColumn
+        // Scrolls when the recipe outgrows the card (a poolish, a flour
+        // blend and a schedule all add rows); Print/Copy stay pinned below.
+        ScrollView {
+          id: cardScroll
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.top: parent.top
-          anchors.margins: card.pad
+          anchors.bottom: cardButtons.top
+          anchors.leftMargin: card.pad
+          anchors.rightMargin: card.pad
+          anchors.topMargin: card.pad
+          anchors.bottomMargin: Style.spacing.md
+          clip: true
+          ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+          ScrollBar.vertical.policy: cardColumn.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+
+          Binding {
+            target: cardScroll.contentItem
+            property: "boundsBehavior"
+            value: Flickable.StopAtBounds
+          }
+
+        Column {
+          id: cardColumn
+          width: cardScroll.availableWidth - (cardColumn.implicitHeight > cardScroll.height ? Style.space(10) : 0)
           spacing: Style.spacing.sm
 
           PizzaPreview {
@@ -1049,28 +1293,47 @@ Panel {
 
           PanelSectionHeader { text: "Ingredients" }
 
-          RecipeRow { label: "Flour"; amount: Calculator.formatGrams(root.recipe.flourG) }
-          RecipeRow { label: "Water"; amount: Calculator.formatGrams(root.recipe.waterG) }
-          RecipeRow { label: "Salt"; amount: Calculator.formatGrams(root.recipe.saltG) }
-          RecipeRow { visible: root.oilPct > 0; label: "Oil"; amount: Calculator.formatGrams(root.recipe.oilG) }
-          RecipeRow { visible: root.sugarPct > 0; label: "Sugar"; amount: Calculator.formatGrams(root.recipe.sugarG) }
-          RecipeRow { visible: root.maltPct > 0; label: "Diastatic malt"; amount: Calculator.formatGrams(root.recipe.maltG) }
-          RecipeRow {
-            label: "Yeast (" + Calculator.yeastTypeLabel(root.yeastType) + ", " + root.recipe.yeastPct.toFixed(2) + "%)"
-            amount: Calculator.formatGrams(root.recipe.yeastG)
-          }
+          Repeater {
+            model: root.recipeSections
+            Column {
+              id: section
+              required property var modelData
+              required property int index
+              width: cardColumn.width
+              spacing: Style.spacing.sm
+              topPadding: index > 0 ? Style.spacing.sm : 0
 
-          // The same dose by volume, for anyone without a fine scale; the
-          // grams above stay the exact figure.
-          Text {
-            width: parent.width
-            visible: text !== ""
-            horizontalAlignment: Text.AlignRight
-            textFormat: Text.PlainText
-            text: Calculator.yeastSpoonText(root.recipe.yeastG, root.yeastType)
-            color: Qt.darker(Color.foreground, 1.3)
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
+              StageLabel {
+                visible: section.modelData.title !== ""
+                width: parent.width
+                elide: Text.ElideRight
+                text: section.modelData.title
+              }
+
+              Repeater {
+                model: section.modelData.rows
+                Column {
+                  id: row
+                  required property var modelData
+                  width: section.width
+
+                  RecipeRow { label: row.modelData.label; amount: row.modelData.amount }
+
+                  // The same dose by volume, for anyone without a fine
+                  // scale; the grams above stay the exact figure.
+                  Text {
+                    width: parent.width
+                    visible: !!row.modelData.spoon
+                    horizontalAlignment: Text.AlignRight
+                    textFormat: Text.PlainText
+                    text: row.modelData.spoon || ""
+                    color: Qt.darker(Color.foreground, 1.3)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+            }
           }
 
           Text {
@@ -1079,6 +1342,18 @@ Panel {
             wrapMode: Text.WordWrap
             text: "Ferment " + Calculator.formatStages(root.stages, root.metric)
               + (!root.twoStage && root.fermentTempF <= 45 ? " (fridge)" : "")
+            color: Qt.darker(Color.foreground, 1.3)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            width: parent.width
+            visible: root.warmGraceHours > 0
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: "Room-temp time next to the fridge (up to " + Calculator.WARM_GRACE_HOURS
+              + " h a stage) doesn't lower the yeast: bakers find chart doses for cold ferments already run low."
             color: Qt.darker(Color.foreground, 1.3)
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -1113,7 +1388,7 @@ Panel {
             visible: root.scheduleOn && root.bakeMoved && !root.scheduleLate
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            text: "That's too soon for a " + root.totalHours + " h ferment — moved to the earliest bake, "
+            text: "That's too soon for a " + root.leadHours + " h ferment — moved to the earliest bake, "
               + Calculator.formatWhen(root.plannedBakeAt, root.nowMs) + " (mix now)."
             color: Color.accent
             font.family: Style.font.family
@@ -1126,7 +1401,7 @@ Panel {
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             text: "Mixing time has already passed. If you haven't mixed yet, start now and bake "
-              + Calculator.formatWhen(Calculator.earliestBakeAt(root.stages, root.nowMs), root.nowMs) + "."
+              + Calculator.formatWhen(Calculator.earliestBakeAt(root.stages, root.nowMs, root.poolishLeadHours), root.nowMs) + "."
             color: Color.accent
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
@@ -1142,6 +1417,7 @@ Panel {
             onClicked: root.startNow()
           }
 
+        }
         }
 
         Row {
