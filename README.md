@@ -69,8 +69,12 @@ doses for cold ferments already run low in practice, as bakers on the Pizza
 Making Forum report; this is a rule of thumb, not chart data.
 
 Turn on **Poolish** to ferment part of the flour (10% up to the dough's
-hydration) ahead of time with an equal weight of water. Its yeast comes from
-the same chart, for the poolish's own time and temperature; the main
+hydration) ahead of time, at room temperature (60–80°F), with an equal
+weight of water. Its yeast comes from the same chart, for the poolish's own
+time and temperature — about 0.04% instant yeast for 16 h at 70°F, in line
+with published poolish guidelines. (There's no fridge option: there's no
+reliable data for a cold poolish, and the dough chart overshoots badly
+there); the main
 fermentation's yeast is then measured against the flour added at the final
 mix. The card lists the poolish and the final dough separately, and the
 schedule adds a "Mix poolish" step.

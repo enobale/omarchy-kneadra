@@ -344,7 +344,7 @@ Panel {
     thicknessFactorOz: [0.05, 0.30], ballWeight: [50, 2000],
     hydrationPct: [50, 90], saltPct: [0, 4], oilPct: [0, 10], sugarPct: [0, 5], maltPct: [0, 2],
     fermentTempF: [33, 90], fermentHours: [1, 240], stage2TempF: [33, 90], stage2Hours: [1, 240],
-    poolishPct: [10, 100], poolishHours: [1, 72], poolishTempF: [33, 90],
+    poolishPct: [10, 100], poolishHours: [1, 72], poolishTempF: [60, 80],
     shape: ["round", "pan"], thickness: ["thin", "medium", "thick", "custom"], yeastType: ["idy", "ady", "fresh"], scheduleMode: ["bake", "start"]
   })
   readonly property string settingsJson: JSON.stringify({
@@ -398,7 +398,8 @@ Panel {
     root.poolishOn = s.poolishOn
     root.poolishPct = s.poolishPct
     root.poolishHours = s.poolishHours
-    root.poolishTempF = s.poolishTempF
+    // Older versions allowed a fridge poolish; those start over at 70°F.
+    root.poolishTempF = saved && saved.poolishTempF < 60 ? 70 : s.poolishTempF
     // Arrays aren't covered by sanitizeSettings; check each flour here.
     var savedFlours = saved && Array.isArray(saved.flours) ? saved.flours.filter(function(f) {
       return f && typeof f.name === "string" && typeof f.pct === "number" && isFinite(f.pct)
@@ -915,6 +916,9 @@ Panel {
                 placeholderText: "Flour name"
                 maximumLength: 24
                 onTextEdited: root.setFlourName(flourRow.index, text)
+                // Show a long name from its start, not scrolled to the cursor.
+                Component.onCompleted: cursorPosition = 0
+                onActiveFocusChanged: if (!activeFocus) cursorPosition = 0
               }
 
               // The first flour is whatever the others leave of 100%.
@@ -970,7 +974,7 @@ Panel {
           Toggle {
             width: parent.width
             label: "Poolish"
-            description: "Part of the flour, with the same weight of water and a pinch of yeast, fermented ahead"
+            description: "Part of the flour, with the same weight of water and a pinch of yeast, fermented ahead at room temperature"
             checked: root.poolishOn
             onClicked: root.poolishOn = !root.poolishOn
           }
@@ -997,23 +1001,16 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
 
-          ButtonGroup {
-            visible: root.poolishOn
-            options: [
-              { value: "70", label: "Room temp (" + Calculator.formatTemp(70, root.metric) + ")" },
-              { value: "38", label: "Fridge (" + Calculator.formatTemp(38, root.metric) + ")" }
-            ]
-            value: String(Math.round(root.poolishTempF))
-            onChanged: function(v) { root.poolishTempF = parseInt(v, 10) }
-          }
-
+          // Room temperature only: published poolish guidelines are all for
+          // room temp, and the dough chart gives absurd doses for a short
+          // poolish in the fridge (e.g. ~2% for 16 h at 38°F).
           Repeater {
             model: root.poolishOn ? [root.metric] : []
             NumberField {
-              label: "Poolish temperature (" + (root.metric ? "°C" : "°F") + ")"
+              label: "Room temperature (" + (root.metric ? "°C" : "°F") + ")"
               value: Math.round(Calculator.tempToDisplay(root.poolishTempF, root.metric))
-              from: root.metric ? 1 : 33
-              to: root.metric ? 32 : 90
+              from: root.metric ? 16 : 60
+              to: root.metric ? 27 : 80
               stepSize: 1
               onModified: function(v) { root.poolishTempF = Calculator.tempFromDisplay(v, root.metric) }
             }
